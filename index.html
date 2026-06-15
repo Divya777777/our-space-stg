@@ -41,27 +41,12 @@
       <div id="signInStep">
         <div class="card-icon">💫</div>
         <h2 class="card-title">Welcome</h2>
-        <p class="card-desc">Sign in to get started</p>
+        <p class="card-desc">Sign in with Google to get started</p>
 
         <!-- Google Sign-In Button -->
-        <div class="google-signin-wrapper">
+        <div class="google-signin-wrapper" style="margin-top: 24px;">
           <div id="googleSignInBtn"></div>
         </div>
-
-        <div class="divider"><span>or</span></div>
-
-        <!-- Continue with Name fallback -->
-        <div class="input-group">
-          <label for="nameInput" class="input-label">Continue with your name</label>
-          <div class="input-wrapper">
-            <span class="input-icon">🌸</span>
-            <input id="nameInput" type="text" class="glass-input" placeholder="Your name..." maxlength="20"
-              autocomplete="off" />
-          </div>
-        </div>
-        <button class="enter-btn" id="continueNameBtn" style="width:100%; margin-top: 8px;">
-          <span>Continue →</span>
-        </button>
       </div>
 
       <!-- Step 2: Room Selection (shown after sign-in) -->

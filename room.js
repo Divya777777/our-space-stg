@@ -435,6 +435,28 @@ function setStatus(state, text) {
     statusText.textContent = text;
 }
 
+// ─── AUTH MODAL ───────────────────────────────────────
+let pendingAuthConns = {};
+
+document.getElementById('authAcceptBtn').addEventListener('click', () => {
+    document.getElementById('authModal').classList.remove('show');
+    for (const peerId in pendingAuthConns) {
+        const p = pendingAuthConns[peerId];
+        acceptPeer(p.conn, p.name);
+    }
+    pendingAuthConns = {};
+});
+
+document.getElementById('authRejectBtn').addEventListener('click', () => {
+    document.getElementById('authModal').classList.remove('show');
+    for (const peerId in pendingAuthConns) {
+        const p = pendingAuthConns[peerId];
+        p.conn.send({ type: 'auth_rejected' });
+        setTimeout(() => p.conn.close(), 1000);
+    }
+    pendingAuthConns = {};
+});
+
 // ─────────────────────────────────────────────────────
 //  WEBRTC / PEERJS
 // ─────────────────────────────────────────────────────
@@ -583,10 +605,12 @@ function setupHostListeners() {
         console.log('[HOST] Incoming connection from peer:', conn.peer, 'serialization:', conn.serialization);
 
         conn.on('data', async msg => {
-            // Guest sends 'join' — auto-accept immediately
-            if (msg.type === 'join') {
-                console.log('[HOST] Guest joining:', msg.name);
-                acceptPeer(conn, msg.name || 'Guest');
+            // Guest sends 'auth_request'
+            if (msg.type === 'auth_request') {
+                console.log('[HOST] Auth request from:', msg.name);
+                pendingAuthConns[conn.peer] = { conn, name: msg.name || 'Guest' };
+                document.getElementById('authDesc').textContent = `${msg.name || 'Someone'} wants to join the room.`;
+                document.getElementById('authModal').classList.add('show');
                 return;
             }
 
@@ -935,8 +959,8 @@ function connectToHost(retryCount = 0) {
             console.log('[GUEST] Data channel opened to host');
             clearTimeout(connectionTimeout);
             connectionAttempts = 0;
-            // Send join request (no auth needed)
-            hostConn.send({ type: 'join', name: myName, avatar: myAvatar });
+            setStatus('connecting', 'Waiting for host approval...');
+            hostConn.send({ type: 'auth_request', name: myName, avatar: myAvatar });
         });
 
         hostConn.on('error', err => {
@@ -963,6 +987,15 @@ function connectToHost(retryCount = 0) {
                     console.error('[SYNC] ❌ Encryption test failed:', err);
                     toast('Encryption not working — sync may fail!', 'error');
                 }
+                return;
+            }
+
+            // Host rejected us
+            if (msg.type === 'auth_rejected') {
+                console.warn('[GUEST] Host rejected connection');
+                setStatus('disconnected', 'Host rejected request.');
+                toast('The host declined your request to join.', 'error', 5000);
+                setTimeout(() => { window.location.href = 'index.html'; }, 3000);
                 return;
             }
 
@@ -1069,12 +1102,16 @@ function handleConnectionFailure(retryCount, error = null) {
 
     if (retryCount < MAX_CONNECTION_ATTEMPTS - 1) {
         console.log(`[GUEST] Retrying connection (${retryCount + 1}/${MAX_CONNECTION_ATTEMPTS - 1})...`);
-        toast(`Connection failed. Retrying... (${retryCount + 2}/${MAX_CONNECTION_ATTEMPTS})`, 'warning', 3000);
+        toast(`Connecting to room... (${retryCount + 2}/${MAX_CONNECTION_ATTEMPTS})`, 'info', 3000);
         connectToHost(retryCount + 1);
     } else {
         console.error('[GUEST] Max connection attempts reached. Giving up.');
-        setStatus('disconnected', 'Could not reach host.');
-        toast('Could not reach Host. Please check:\n1. Host has created the room\n2. Room code is correct\n3. Both you and host have stable internet', 'error', 8000);
+        setStatus('disconnected', 'Room does not exist.');
+        toast('Room does not exist or Host disconnected. Redirecting...', 'error', 5000);
+        
+        setTimeout(() => {
+            window.location.href = 'index.html';
+        }, 3000);
     }
 }
 

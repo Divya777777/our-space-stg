@@ -330,8 +330,17 @@
         <a id="imageModalDownload" href="" download class="image-modal-download">Download</a>
     </div>
 
-    <!-- Auth modal removed — guests now join automatically via room code -->
-
+    <!-- Auth Modal (Host Approval) -->
+    <div class="auth-modal" id="authModal">
+        <div class="auth-card glass-card">
+            <h2 class="auth-title">Knock Knock</h2>
+            <p class="auth-desc" id="authDesc">Someone wants to join the room.</p>
+            <div style="display:flex;gap:12px;margin-top:24px;">
+                <button class="auth-btn btn-reject" id="authRejectBtn">Reject</button>
+                <button class="auth-btn" id="authAcceptBtn">Accept</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Incoming Call Notification -->
     <div id="incomingCallModal"

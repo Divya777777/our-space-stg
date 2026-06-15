@@ -64,9 +64,9 @@ function handleGoogleSignIn(response) {
       avatar: payload.picture || '',
     };
 
-    sessionStorage.setItem('ourspace_name', currentUser.name);
-    sessionStorage.setItem('ourspace_avatar', currentUser.avatar);
-    sessionStorage.setItem('ourspace_email', currentUser.email);
+    localStorage.setItem('ourspace_name', currentUser.name);
+    localStorage.setItem('ourspace_avatar', currentUser.avatar);
+    localStorage.setItem('ourspace_email', currentUser.email);
 
     showRoomStep();
     console.log('[AUTH] Google Sign-In successful:', currentUser.name);
@@ -83,8 +83,8 @@ function showRoomStep() {
   document.getElementById('signInStep').style.display = 'none';
   document.getElementById('roomStep').style.display = 'block';
 
-  const name = currentUser?.name || sessionStorage.getItem('ourspace_name') || 'You';
-  const avatar = currentUser?.avatar || sessionStorage.getItem('ourspace_avatar') || '';
+  const name = currentUser?.name || localStorage.getItem('ourspace_name') || 'You';
+  const avatar = currentUser?.avatar || localStorage.getItem('ourspace_avatar') || '';
 
   document.getElementById('userName').textContent = name;
   if (avatar) {
@@ -98,19 +98,19 @@ function showSignInStep() {
   document.getElementById('signInStep').style.display = 'block';
   document.getElementById('roomStep').style.display = 'none';
   currentUser = null;
-  sessionStorage.removeItem('ourspace_name');
-  sessionStorage.removeItem('ourspace_avatar');
-  sessionStorage.removeItem('ourspace_email');
+  localStorage.removeItem('ourspace_name');
+  localStorage.removeItem('ourspace_avatar');
+  localStorage.removeItem('ourspace_email');
 }
 
 // Check if user is already signed in (page reload)
 function checkExistingSession() {
-  const name = sessionStorage.getItem('ourspace_name');
+  const name = localStorage.getItem('ourspace_name');
   if (name) {
     currentUser = {
       name,
-      avatar: sessionStorage.getItem('ourspace_avatar') || '',
-      email: sessionStorage.getItem('ourspace_email') || '',
+      avatar: localStorage.getItem('ourspace_avatar') || '',
+      email: localStorage.getItem('ourspace_email') || '',
     };
     showRoomStep();
     return true;
@@ -139,16 +139,16 @@ function generateRoomCode() {
 // ──────────────────────────────────────────────────────
 
 function enterRoom(roomCode) {
-  const name = currentUser?.name || sessionStorage.getItem('ourspace_name') || 'You';
-  if (!name || name === 'You') { shake('nameInput'); return; }
+  const name = currentUser?.name || localStorage.getItem('ourspace_name') || 'You';
+  if (!name || name === 'You') return;
   if (!roomCode) return;
 
   const cleanCode = roomCode.trim().toUpperCase();
   if (cleanCode.length < 4) return;
 
   saveRecentRoom(name, cleanCode);
-  sessionStorage.setItem('ourspace_name', name);
-  sessionStorage.setItem('ourspace_room', cleanCode);
+  localStorage.setItem('ourspace_name', name);
+  sessionStorage.setItem('ourspace_room', cleanCode); // Room code remains session-only
 
   window.location.href = 'room.html';
 }
@@ -192,7 +192,7 @@ function escHtml(str) {
 }
 
 window.joinRecent = function (room) {
-  if (!sessionStorage.getItem('ourspace_name')) {
+  if (!localStorage.getItem('ourspace_name')) {
     document.getElementById('roomInput').value = room;
     return;
   }
@@ -237,19 +237,6 @@ window.joinRecent = function (room) {
 // ──────────────────────────────────────────────────────
 //  EVENT LISTENERS
 // ──────────────────────────────────────────────────────
-
-// Continue with name
-document.getElementById('continueNameBtn').addEventListener('click', () => {
-  const name = document.getElementById('nameInput').value.trim();
-  if (!name) { shake('nameInput'); return; }
-  currentUser = { name, email: '', avatar: '' };
-  sessionStorage.setItem('ourspace_name', name);
-  showRoomStep();
-});
-
-document.getElementById('nameInput').addEventListener('keydown', e => {
-  if (e.key === 'Enter') document.getElementById('continueNameBtn').click();
-});
 
 // Create room
 document.getElementById('createBtn').addEventListener('click', () => {
