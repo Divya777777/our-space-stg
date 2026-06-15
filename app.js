@@ -21,12 +21,12 @@ let currentUser = null; // { name, email, avatar }
 
 function initGoogleSignIn() {
   if (typeof google === 'undefined' || !google.accounts) {
-    console.warn('[AUTH] Google Identity Services not loaded — using name-only fallback');
+    console.warn('[AUTH] Google Identity Services not loaded');
     return;
   }
 
   if (GOOGLE_CLIENT_ID.includes('YOUR_CLIENT_ID_HERE')) {
-    console.warn('[AUTH] Google Client ID not configured — using name-only fallback');
+    console.warn('[AUTH] Google Client ID not configured — sign-in button will not work');
     return;
   }
 
