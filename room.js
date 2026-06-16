@@ -445,6 +445,8 @@ document.getElementById('authAcceptBtn').addEventListener('click', () => {
         acceptPeer(p.conn, p.name);
     }
     pendingAuthConns = {};
+    updatePendingBadge();
+    updateMembersPanel();
 });
 
 document.getElementById('authRejectBtn').addEventListener('click', () => {
@@ -455,7 +457,173 @@ document.getElementById('authRejectBtn').addEventListener('click', () => {
         setTimeout(() => p.conn.close(), 1000);
     }
     pendingAuthConns = {};
+    updatePendingBadge();
+    updateMembersPanel();
 });
+
+// ─────────────────────────────────────────────────────
+//  MEMBERS PANEL
+// ─────────────────────────────────────────────────────
+const membersBtn = document.getElementById('membersBtn');
+const membersPanel = document.getElementById('membersPanel');
+const membersOverlay = document.getElementById('membersOverlay');
+const closeMembersPanel = document.getElementById('closeMembersPanel');
+const pendingCountBadge = document.getElementById('pendingCountBadge');
+
+// Toggle members panel
+membersBtn.addEventListener('click', () => {
+    membersPanel.classList.add('show');
+    membersOverlay.classList.add('show');
+    updateMembersPanel();
+});
+
+// Close panel
+closeMembersPanel.addEventListener('click', closeMembersPanelFunc);
+membersOverlay.addEventListener('click', closeMembersPanelFunc);
+
+function closeMembersPanelFunc() {
+    membersPanel.classList.remove('show');
+    membersOverlay.classList.remove('show');
+}
+
+// Update members panel content
+function updateMembersPanel() {
+    // Update pending requests
+    const pendingRequestsList = document.getElementById('pendingRequestsList');
+    const pendingRequestsSection = document.getElementById('pendingRequestsSection');
+    const pendingRequestsCount = document.getElementById('pendingRequestsCount');
+    const pendingCount = Object.keys(pendingAuthConns).length;
+
+    if (pendingCount > 0) {
+        pendingRequestsSection.style.display = 'block';
+        pendingRequestsCount.textContent = pendingCount;
+        pendingRequestsList.innerHTML = '';
+
+        for (const peerId in pendingAuthConns) {
+            const p = pendingAuthConns[peerId];
+            const itemDiv = document.createElement('div');
+            itemDiv.className = 'member-item pending-item';
+            itemDiv.innerHTML = `
+                <div class="member-avatar">👤</div>
+                <div class="member-info">
+                    <div class="member-name">${p.name || 'Guest'}</div>
+                    <div class="member-status">
+                        <span class="status-dot"></span>
+                        Waiting for approval
+                    </div>
+                </div>
+                <div class="member-actions">
+                    <button class="member-action-btn reject-btn" onclick="rejectPeerFromPanel('${peerId}')">Reject</button>
+                    <button class="member-action-btn accept-btn" onclick="acceptPeerFromPanel('${peerId}')">Accept</button>
+                </div>
+            `;
+            pendingRequestsList.appendChild(itemDiv);
+        }
+    } else {
+        pendingRequestsSection.style.display = 'none';
+    }
+
+    // Update current members
+    const currentMembersList = document.getElementById('currentMembersList');
+    const currentMembersCount = document.getElementById('currentMembersCount');
+    const memberCount = Object.keys(peersMap).length + 1; // +1 for self
+    currentMembersCount.textContent = memberCount;
+    currentMembersList.innerHTML = '';
+
+    // Add self
+    const selfDiv = document.createElement('div');
+    selfDiv.className = 'member-item';
+    selfDiv.innerHTML = `
+        <div class="member-avatar">${myAvatar ? `<img src="${myAvatar}" alt="${myName}">` : '👤'}</div>
+        <div class="member-info">
+            <div class="member-name">
+                ${myName} (You)
+                ${isHost ? '<span class="host-badge">HOST</span>' : ''}
+            </div>
+            <div class="member-status">
+                <span class="status-dot"></span>
+                Connected
+            </div>
+        </div>
+    `;
+    currentMembersList.appendChild(selfDiv);
+
+    // Add other members
+    for (const peerId in peersMap) {
+        const peer = peersMap[peerId];
+        const memberDiv = document.createElement('div');
+        memberDiv.className = 'member-item';
+        memberDiv.innerHTML = `
+            <div class="member-avatar">👤</div>
+            <div class="member-info">
+                <div class="member-name">
+                    ${peer.name || 'Guest'}
+                    ${peerId === hostId ? '<span class="host-badge">HOST</span>' : ''}
+                </div>
+                <div class="member-status">
+                    <span class="status-dot"></span>
+                    Connected
+                </div>
+            </div>
+        `;
+        currentMembersList.appendChild(memberDiv);
+    }
+
+    if (memberCount === 1) {
+        const emptyDiv = document.createElement('div');
+        emptyDiv.className = 'empty-state';
+        emptyDiv.innerHTML = `
+            <div class="empty-state-icon">🌙</div>
+            <div>You're the only one here.<br>Share the room code to invite others!</div>
+        `;
+        currentMembersList.appendChild(emptyDiv);
+    }
+
+    // Update badge on members button
+    updatePendingBadge();
+}
+
+// Update pending count badge
+function updatePendingBadge() {
+    const pendingCount = Object.keys(pendingAuthConns).length;
+    if (pendingCount > 0) {
+        pendingCountBadge.textContent = pendingCount;
+        pendingCountBadge.style.display = 'block';
+    } else {
+        pendingCountBadge.style.display = 'none';
+    }
+}
+
+// Accept peer from panel
+window.acceptPeerFromPanel = function(peerId) {
+    const p = pendingAuthConns[peerId];
+    if (p) {
+        acceptPeer(p.conn, p.name);
+        delete pendingAuthConns[peerId];
+        updateMembersPanel();
+
+        // Close modal if no more pending requests
+        if (Object.keys(pendingAuthConns).length === 0) {
+            document.getElementById('authModal').classList.remove('show');
+        }
+    }
+};
+
+// Reject peer from panel
+window.rejectPeerFromPanel = function(peerId) {
+    const p = pendingAuthConns[peerId];
+    if (p) {
+        p.conn.send({ type: 'auth_rejected' });
+        setTimeout(() => p.conn.close(), 1000);
+        delete pendingAuthConns[peerId];
+        updateMembersPanel();
+
+        // Close modal if no more pending requests
+        if (Object.keys(pendingAuthConns).length === 0) {
+            document.getElementById('authModal').classList.remove('show');
+        }
+    }
+};
 
 // ─────────────────────────────────────────────────────
 //  WEBRTC / PEERJS
@@ -627,6 +795,9 @@ function setupHostListeners() {
 
                 authModal.classList.add('show');
                 console.log('[HOST] Knock-knock modal displayed for:', msg.name);
+
+                // Update members panel and badge
+                updatePendingBadge();
                 return;
             }
 
@@ -951,6 +1122,11 @@ function acceptPeer(conn, guestName) {
     toast(`${guestName} joined! 🌙`, 'success');
     renderChatRecipientDropdown();
 
+    // Update members panel when guest joins
+    if (typeof updateMembersPanel === 'function') {
+        updateMembersPanel();
+    }
+
     // Send sync ping to verify the connection works
     setTimeout(() => sendSyncPing(conn), 1000);
 
@@ -1058,6 +1234,12 @@ function connectToHost(retryCount = 0) {
                 }
 
                 renderChatRecipientDropdown();
+
+                // Update members panel when joining room
+                if (typeof updateMembersPanel === 'function') {
+                    updateMembersPanel();
+                }
+
                 setTimeout(() => sendSyncPing(hostConn), 1000);
                 return;
             }
@@ -1152,6 +1334,11 @@ function setupGuestToGuest(conn, peerName) {
     conn.on('open', () => { conn.send({ type: 'peer_intro', name: myName }); });
     peersMap[conn.peer] = { dataConn: conn, name: peerName, callConn: null, stream: null };
 
+    // Update members panel when guest-to-guest connection established
+    if (typeof updateMembersPanel === 'function') {
+        updateMembersPanel();
+    }
+
     conn.on('data', async msg => {
         if (msg.type === 'peer_intro') return; // Ignore duplicate intros
         if (msg.type === 'sync_ping') {
@@ -1191,6 +1378,11 @@ function handlePeerDisconnect(id) {
         removeVideoPanel(id);
         delete peersMap[id];
         renderChatRecipientDropdown();
+
+        // Update members panel when someone leaves
+        if (typeof updateMembersPanel === 'function') {
+            updateMembersPanel();
+        }
     }
 }
 
@@ -1486,7 +1678,7 @@ window.onYouTubeIframeAPIReady = function () {
         width: '100%',
         playerVars: {
             autoplay: 0,
-            controls: 0,
+            controls: 1,  // Enable YouTube native controls for better UX
             modestbranding: 1,
             rel: 0,
             iv_load_policy: 3,
@@ -1494,33 +1686,71 @@ window.onYouTubeIframeAPIReady = function () {
             origin: window.location.origin,
         },
         events: {
-            onReady: () => { ytReady = true; },
+            onReady: () => {
+                ytReady = true;
+                console.log('[YT] YouTube player ready');
+            },
             onStateChange: onYtStateChange,
         },
     });
 };
 
 function onYtStateChange(event) {
-    if (isSyncing) return;
     const state = event.data;
+    const stateNames = {
+        '-1': 'UNSTARTED',
+        '0': 'ENDED',
+        '1': 'PLAYING',
+        '2': 'PAUSED',
+        '3': 'BUFFERING',
+        '5': 'CUED'
+    };
+    console.log('[YT] State change:', stateNames[state] || state, 'isSyncing:', isSyncing);
+
     // Ignore BUFFERING state changes — they are transient and cause echo loops
     if (state === YT.PlayerState.BUFFERING) return;
+
     const videoId = (ytPlayer.getVideoData && ytPlayer.getVideoData().video_id) || ytVideoId || '';
     const currentTime = ytPlayer.getCurrentTime() || 0;
 
+    // ALWAYS update local UI state, regardless of isSyncing flag
+    // This ensures timeline updates even when using YouTube native controls
     ytPlaying = state === YT.PlayerState.PLAYING;
     updateYtIcon();
 
-    if (ytPlaying) { startYtTimer(); startSyncHeartbeat(); }
-    else { clearInterval(ytTimer); stopSyncHeartbeat(); }
+    console.log('[YT] ytPlaying set to:', ytPlaying, 'Starting/stopping timer...');
+    if (ytPlaying) {
+        startYtTimer();
+        startSyncHeartbeat();
+    } else {
+        clearInterval(ytTimer);
+        stopSyncHeartbeat();
+        // Update progress bar one final time when stopped/paused
+        // This ensures the timeline shows the correct position even when not playing
+        if (ytPlayer && ytReady) {
+            const cur = ytPlayer.getCurrentTime() || 0;
+            const dur = ytPlayer.getDuration() || 0;
+            const pct = dur > 0 ? (cur / dur) * 100 : 0;
+            ytProgressFill.style.width = pct + '%';
+            ytCurrentTimeEl.textContent = secToTime(cur);
+            ytTotalTimeEl.textContent = secToTime(dur);
+        }
+    }
 
-    sendSync({
-        type: 'yt_state',
-        videoId,
-        currentTime,
-        playing: ytPlaying,
-        sentBy: myName,
-    });
+    // Only send sync to peers if this wasn't triggered by a sync message
+    // This prevents echo loops where peers keep syncing back and forth
+    if (!isSyncing) {
+        console.log('[YT] Sending sync to peers:', { playing: ytPlaying, currentTime });
+        sendSync({
+            type: 'yt_state',
+            videoId,
+            currentTime,
+            playing: ytPlaying,
+            sentBy: myName,
+        });
+    } else {
+        console.log('[YT] Skipping sync broadcast (triggered by peer sync)');
+    }
 }
 
 // Extract video ID from any YouTube/YouTube Music URL or bare ID
@@ -1606,16 +1836,24 @@ function updateYtIcon() {
 
 function startYtTimer() {
     clearInterval(ytTimer);
+    console.log('[YT] Starting progress timer');
     ytTimer = setInterval(() => {
-        if (!ytPlayer || !ytReady) return;
+        if (!ytPlayer || !ytReady) {
+            console.warn('[YT] Timer running but player not ready');
+            return;
+        }
         const cur = ytPlayer.getCurrentTime() || 0;
         const dur = ytPlayer.getDuration() || 0;
         ytDuration = dur;
         const pct = dur > 0 ? (cur / dur) * 100 : 0;
+
+        // Update progress bar
         ytProgressFill.style.width = pct + '%';
+
+        // Update time displays
         ytCurrentTimeEl.textContent = secToTime(cur);
         ytTotalTimeEl.textContent = secToTime(dur);
-    }, 600);
+    }, 300);  // Update more frequently for smoother progress
 }
 
 function secToTime(s) {
@@ -1655,6 +1893,11 @@ async function handleSyncMessage(msg, senderId) {
         if (msg.id !== hostId && msg.id !== peer?.id) {
             const conn = peer.connect(msg.id, { reliable: true, serialization: 'json' });
             setupGuestToGuest(conn, msg.name);
+        }
+
+        // Update members panel when a new guest joins
+        if (typeof updateMembersPanel === 'function') {
+            updateMembersPanel();
         }
         return;
     }

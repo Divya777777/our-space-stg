@@ -134,6 +134,12 @@
                 </svg>
                 Start Call
             </button>
+            <button class="members-btn" id="membersBtn" title="View members and pending requests">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+                    <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" />
+                </svg>
+                <span id="pendingCountBadge" class="pending-badge" style="display:none;">0</span>
+            </button>
             <span class="user-name-display" id="myNameDisplay"></span>
             <button class="cinema-btn" id="cinemaBtn" title="Cinema mode (F)">🎬</button>
             <button class="leave-btn" id="leaveBtn">Leave 🚀</button>
@@ -341,6 +347,35 @@
             </div>
         </div>
     </div>
+
+    <!-- Members Panel -->
+    <div class="members-panel" id="membersPanel">
+        <div class="members-panel-header">
+            <h3>Members & Requests</h3>
+            <button class="close-panel-btn" id="closeMembersPanel">✕</button>
+        </div>
+
+        <div class="members-panel-content">
+            <!-- Pending Requests Section -->
+            <div class="members-section" id="pendingRequestsSection" style="display:none;">
+                <h4>Pending Requests <span class="count-badge" id="pendingRequestsCount">0</span></h4>
+                <div class="members-list" id="pendingRequestsList">
+                    <!-- Pending requests will be added here dynamically -->
+                </div>
+            </div>
+
+            <!-- Current Members Section -->
+            <div class="members-section">
+                <h4>Current Members <span class="count-badge" id="currentMembersCount">0</span></h4>
+                <div class="members-list" id="currentMembersList">
+                    <!-- Current members will be added here dynamically -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Members Panel Overlay -->
+    <div class="members-overlay" id="membersOverlay"></div>
 
     <!-- Incoming Call Notification -->
     <div id="incomingCallModal"
