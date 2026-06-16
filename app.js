@@ -149,6 +149,9 @@ function enterRoom(roomCode) {
   saveRecentRoom(name, cleanCode);
   localStorage.setItem('ourspace_name', name);
   sessionStorage.setItem('ourspace_room', cleanCode); // Room code remains session-only
+  // Store avatar and email in sessionStorage so guest can send them in auth_request
+  sessionStorage.setItem('ourspace_avatar', currentUser?.avatar || localStorage.getItem('ourspace_avatar') || '');
+  sessionStorage.setItem('ourspace_email', currentUser?.email || localStorage.getItem('ourspace_email') || '');
 
   window.location.href = 'room.html';
 }

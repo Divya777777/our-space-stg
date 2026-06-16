@@ -600,17 +600,33 @@ async function setupPeer() {
 
 function setupHostListeners() {
     console.log('[HOST] Setting up listeners for incoming connections');
+    console.log('[HOST] Host ID:', hostId);
 
     peer.on('connection', conn => {
         console.log('[HOST] Incoming connection from peer:', conn.peer, 'serialization:', conn.serialization);
+        console.log('[HOST] Current isHost status:', isHost);
 
         conn.on('data', async msg => {
             // Guest sends 'auth_request'
             if (msg.type === 'auth_request') {
-                console.log('[HOST] Auth request from:', msg.name);
+                console.log('[HOST] Auth request from:', msg.name, 'avatar:', msg.avatar);
                 pendingAuthConns[conn.peer] = { conn, name: msg.name || 'Guest' };
-                document.getElementById('authDesc').textContent = `${msg.name || 'Someone'} wants to join the room.`;
-                document.getElementById('authModal').classList.add('show');
+
+                // Validate modal elements exist before showing
+                const authModal = document.getElementById('authModal');
+                const authDesc = document.getElementById('authDesc');
+
+                if (!authModal) {
+                    console.error('[HOST] authModal element not found! Cannot show knock-knock notification.');
+                    return;
+                }
+
+                if (authDesc) {
+                    authDesc.textContent = `${msg.name || 'Someone'} wants to join the room.`;
+                }
+
+                authModal.classList.add('show');
+                console.log('[HOST] Knock-knock modal displayed for:', msg.name);
                 return;
             }
 
@@ -905,16 +921,31 @@ setTimeout(() => {
 function acceptPeer(conn, guestName) {
     const newPeerId = conn.peer;
 
-    const activePeers = Object.keys(peersMap).map(id => ({ id, name: peersMap[id].name }));
-    conn.send({
-        type: 'welcome',
-        hostName: myName,
-        peers: activePeers,
-        hostPlaylists: roomPlaylists,
-        ytState: { videoId: ytVideoId, time: ytPlayer?.getCurrentTime?.() || 0, playing: ytPlaying }
-    });
-
+    // Add to peersMap BEFORE sending welcome to avoid race conditions
     peersMap[newPeerId] = { dataConn: conn, name: guestName, callConn: null, stream: null };
+
+    // Get list of other peers (excluding the new guest)
+    const activePeers = Object.keys(peersMap)
+        .filter(id => id !== newPeerId)
+        .map(id => ({ id, name: peersMap[id].name }));
+
+    // Send welcome message with error handling
+    try {
+        conn.send({
+            type: 'welcome',
+            hostName: myName,
+            peers: activePeers,
+            hostPlaylists: roomPlaylists,
+            ytState: { videoId: ytVideoId, time: ytPlayer?.getCurrentTime?.() || 0, playing: ytPlaying }
+        });
+        console.log('[HOST] Welcome message sent to:', guestName);
+    } catch (err) {
+        console.error('[HOST] Failed to send welcome message to', guestName, ':', err);
+        delete peersMap[newPeerId];  // Clean up if welcome failed
+        toast(`Failed to accept ${guestName}`, 'error');
+        return;
+    }
+
     broadcast({ type: 'guest_joined', id: newPeerId, name: guestName }, newPeerId);
 
     toast(`${guestName} joined! 🌙`, 'success');
@@ -957,10 +988,12 @@ function connectToHost(retryCount = 0) {
 
         hostConn.on('open', () => {
             console.log('[GUEST] Data channel opened to host');
+            console.log('[GUEST] Sending auth_request with name:', myName, 'avatar:', myAvatar);
             clearTimeout(connectionTimeout);
             connectionAttempts = 0;
             setStatus('connecting', 'Waiting for host approval...');
             hostConn.send({ type: 'auth_request', name: myName, avatar: myAvatar });
+            console.log('[GUEST] auth_request sent successfully');
         });
 
         hostConn.on('error', err => {
