@@ -8,4 +8,4 @@ cmds = ["cd backend && npm install --production=false"]
 cmds = ["cd backend && npx prisma generate"]
 
 [start]
-cmd = "cd backend && npx prisma migrate deploy && node server.js"
+cmd = "cd backend && npx prisma migrate deploy && node ./server.js"
