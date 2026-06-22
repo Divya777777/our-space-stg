@@ -2,10 +2,10 @@
 nixPkgs = ["nodejs_20", "openssl"]
 
 [phases.install]
-cmds = ["cd backend && npm install --production=false"]
+cmds = ["ls -la /app/", "ls -la /app/backend/ || echo 'backend folder not found'", "cd backend && npm install --production=false"]
 
 [phases.build]
 cmds = ["cd backend && npx prisma generate"]
 
 [start]
-cmd = "cd /app/backend && npx prisma migrate deploy && node server.js"
+cmd = "ls -la /app/ && ls -la /app/backend/ && cd /app/backend && npx prisma migrate deploy && node server.js"
