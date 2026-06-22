@@ -732,7 +732,7 @@ async function setupPeer() {
     // Configure PeerJS server based on environment
     if (window.location.hostname === 'divya777777.github.io') {
         // Production: Use Railway backend
-        peerConfig.host = 'our-space-backend-production.up.railway.app';
+        peerConfig.host = 'our-space-production-30ee.up.railway.app';
         peerConfig.port = 443;
         peerConfig.path = '/peerjs';
         peerConfig.secure = true;
