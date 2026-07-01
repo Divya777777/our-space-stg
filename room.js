@@ -1661,7 +1661,6 @@ function renderChatRecipientDropdown() {
     if (currVal && Array.from(sel.options).find(o => o.value === currVal)) {
         sel.value = currVal;
     }
-    }
 }
 
 // ─────────────────────────────────────────────────────
