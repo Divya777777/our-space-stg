@@ -5,8 +5,8 @@ nixPkgs = ["nodejs_20", "openssl"]
 cmds = ["cd backend && npm install"]
 
 [phases.build]
-cmds = ["cd backend && npx prisma generate", "cd backend && npx prisma migrate deploy"]
+cmds = ["cd backend && npx prisma generate"]
 
 [start]
-cmd = "cd backend && node server.js"
+cmd = "cd backend && npx prisma migrate deploy && node server.js"
 
