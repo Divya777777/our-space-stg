@@ -203,6 +203,22 @@ async function startServer() {
       console.log(`Health Check: http://${HOST}:${PORT}/health`);
       console.log('================================================');
       console.log('');
+
+      // Self-test: verify server responds to HTTP requests
+      const http = require('http');
+      setTimeout(() => {
+        console.log('[SELF-TEST] Testing http://localhost:' + PORT + '/health ...');
+        http.get(`http://localhost:${PORT}/health`, (res) => {
+          let data = '';
+          res.on('data', (chunk) => data += chunk);
+          res.on('end', () => console.log('[SELF-TEST] ✅ Response:', res.statusCode, data));
+        }).on('error', (err) => console.error('[SELF-TEST] ❌ Failed:', err.message));
+      }, 3000);
+
+      // Heartbeat: prove process is still alive
+      setInterval(() => {
+        console.log(`[HEARTBEAT] alive | PID=${process.pid} | mem=${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB | ${new Date().toISOString()}`);
+      }, 15000);
     });
 
     server.on('error', (error) => {
