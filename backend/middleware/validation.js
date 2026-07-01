@@ -166,8 +166,8 @@ const validateAddSong = [
     .withMessage('Artist name must be less than 200 characters'),
   body('durationSeconds')
     .notEmpty()
-    .isInt({ min: 1 })
-    .withMessage('Duration must be a positive integer'),
+    .isInt({ min: 0 })
+    .withMessage('Duration must be a non-negative integer'),
   body('thumbnailUrl')
     .optional()
     .isURL()
