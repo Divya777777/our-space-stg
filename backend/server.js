@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
-const { PeerServer } = require('peer');
+const { ExpressPeerServer } = require('peer');
 const morgan = require('morgan');
 
 // Import middleware
@@ -213,15 +213,17 @@ async function startServer() {
       process.exit(1);
     });
 
-    // Attach PeerJS server to the same HTTP server (non-fatal if it fails)
+    // Attach PeerJS as Express middleware (not standalone — standalone hijacks the HTTP server)
     try {
-      const peerServer = PeerServer({
-        server: server,
-        path: process.env.PEERJS_PATH || '/peerjs',
+      const peerPath = process.env.PEERJS_PATH || '/peerjs';
+      const peerServer = ExpressPeerServer(server, {
+        path: '/',
         allow_discovery: true,
         proxied: true, // Important for Railway deployment
         debug: NODE_ENV === 'development' ? 2 : 0
       });
+
+      app.use(peerPath, peerServer);
 
       peerServer.on('connection', (client) => {
         console.log(`✅ PeerJS client connected: ${client.id}`);
@@ -235,7 +237,7 @@ async function startServer() {
         console.error('❌ PeerJS server error:', error);
       });
 
-      console.log('✅ PeerJS server attached');
+      console.log('✅ PeerJS server attached at', peerPath);
     } catch (peerError) {
       console.error('⚠️ PeerJS server failed to initialize (non-fatal):', peerError.message);
     }
