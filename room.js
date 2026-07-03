@@ -1678,17 +1678,19 @@ let selectedAudioOutput = localStorage.getItem('ourspace_audio_out') || 'default
 let selectedVideoInput = localStorage.getItem('ourspace_video_in') || 'default';
 
 function getMediaConstraints() {
-    const audioConstraints = {
-        noiseSuppression: true, echoCancellation: true, autoGainControl: true,
-        googEchoCancellation: true, googAutoGainControl: true, googNoiseSuppression: true, googHighpassFilter: true
+    let audioConstraints = {
+        noiseSuppression: true, 
+        echoCancellation: true, 
+        autoGainControl: true
     };
+    
     if (selectedAudioInput && selectedAudioInput !== 'default') {
-        audioConstraints.deviceId = { exact: selectedAudioInput };
+        audioConstraints.deviceId = selectedAudioInput;
     }
     
-    const videoConstraints = true;
+    let videoConstraints = true;
     if (selectedVideoInput && selectedVideoInput !== 'default') {
-        return { video: { deviceId: { exact: selectedVideoInput } }, audio: audioConstraints };
+        videoConstraints = { deviceId: selectedVideoInput };
     }
     
     return { video: videoConstraints, audio: audioConstraints };
@@ -1696,9 +1698,11 @@ function getMediaConstraints() {
 
 async function populateDeviceLists() {
     try {
-        // Request permissions first to get device labels and IDs
-        const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true }); 
-        tempStream.getTracks().forEach(t => t.stop());
+        // Request permissions first to get device labels and IDs (skip if already active)
+        if (!localStream) {
+            const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true }); 
+            tempStream.getTracks().forEach(t => t.stop());
+        }
         
         const devices = await navigator.mediaDevices.enumerateDevices();
         
@@ -1757,6 +1761,11 @@ async function applyDeviceSettings() {
     if (isInCall && localStream) {
         try {
             const constraints = getMediaConstraints();
+            
+            // Release hardware locks BEFORE requesting new streams.
+            // This is critical for macOS and Linux to switch cameras/mics successfully.
+            localStream.getTracks().forEach(t => t.stop());
+            
             const newStream = await navigator.mediaDevices.getUserMedia(constraints);
             
             // Replace tracks for local video
@@ -1781,8 +1790,6 @@ async function applyDeviceSettings() {
                 }
             });
 
-            // Stop old tracks
-            localStream.getTracks().forEach(t => t.stop());
             localStream = newStream;
             toast('Device settings updated', 'success');
         } catch (e) {
