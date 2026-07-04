@@ -4,11 +4,11 @@
    Room-code-only — no PIN required
    ===================================================== */
 
-// ─── SESSION (cleared on browser close) ──────────────
 const myName = sessionStorage.getItem('ourspace_name') || 'You';
 const roomId = sessionStorage.getItem('currentRoomCode') || sessionStorage.getItem('ourspace_room') || '';
 const myAvatar = sessionStorage.getItem('ourspace_avatar') || '';
 const currentUserId = sessionStorage.getItem('ourspace_userId') || '';
+const pendingRequestId = sessionStorage.getItem('pendingRequestId') || '';
 
 if (!roomId) { window.location.href = 'index.html'; }
 
@@ -458,7 +458,7 @@ document.getElementById('authAcceptBtn').addEventListener('click', () => {
     document.getElementById('authModal').classList.remove('show');
     for (const peerId in pendingAuthConns) {
         const p = pendingAuthConns[peerId];
-        acceptPeer(p.conn, p.name);
+        acceptPeer(p.conn, p.name, p.requestId);
     }
     pendingAuthConns = {};
     updatePendingBadge();
@@ -470,6 +470,10 @@ document.getElementById('authRejectBtn').addEventListener('click', () => {
     for (const peerId in pendingAuthConns) {
         const p = pendingAuthConns[peerId];
         p.conn.send({ type: 'auth_rejected' });
+        if (p.requestId && typeof api !== 'undefined') {
+            api.approveJoinRequest(p.requestId, false)
+                .catch(err => console.error('[DATABASE] Failed to reject join request in db:', err));
+        }
         setTimeout(() => p.conn.close(), 1000);
     }
     pendingAuthConns = {};
@@ -614,7 +618,7 @@ function updatePendingBadge() {
 window.acceptPeerFromPanel = function(peerId) {
     const p = pendingAuthConns[peerId];
     if (p) {
-        acceptPeer(p.conn, p.name);
+        acceptPeer(p.conn, p.name, p.requestId);
         delete pendingAuthConns[peerId];
         updateMembersPanel();
 
@@ -630,6 +634,10 @@ window.rejectPeerFromPanel = function(peerId) {
     const p = pendingAuthConns[peerId];
     if (p) {
         p.conn.send({ type: 'auth_rejected' });
+        if (p.requestId && typeof api !== 'undefined') {
+            api.approveJoinRequest(p.requestId, false)
+                .catch(err => console.error('[DATABASE] Failed to reject join request in db:', err));
+        }
         setTimeout(() => p.conn.close(), 1000);
         delete pendingAuthConns[peerId];
         updateMembersPanel();
@@ -708,6 +716,21 @@ async function setupPeer() {
     setStatus('connecting', 'Connecting…');
     hostId = (await hashRoomId(roomId)) + 'h'; // PeerJS IDs: alphanumeric only, no underscores
 
+    // Fetch room details to identify the true host
+    try {
+        console.log('[PEER] Fetching room details to identify host...');
+        const roomDetails = await api.getRoomByCode(roomId);
+        if (roomDetails && roomDetails.success && roomDetails.room) {
+            const dbHostUserId = roomDetails.room.host.userId;
+            isHost = (currentUserId.toString() === dbHostUserId.toString());
+            console.log('[PEER] Room host user ID:', dbHostUserId, 'My user ID:', currentUserId, 'Am I Host?', isHost);
+        } else {
+            console.warn('[PEER] Could not identify host from database response');
+        }
+    } catch (err) {
+        console.error('[PEER] Failed to fetch room details from API:', err);
+    }
+
     // Auto-detect: use local server if running on localhost/custom port, otherwise use cloud
     const isLocalServer = window.location.protocol === 'http:' &&
         (window.location.hostname === 'localhost' ||
@@ -748,43 +771,56 @@ async function setupPeer() {
     }
 
     return new Promise((resolve) => {
-        peer = new Peer(hostId, peerConfig);
+        if (isHost) {
+            console.log('[PEER] Initializing as Host with ID:', hostId);
+            peer = new Peer(hostId, peerConfig);
 
-        peer.on('open', id => {
-            isHost = true;
-            console.log('[HOST] Successfully registered as host with ID:', id);
-            toast(`Room created! You are the Host. 🌙`, 'success', 5000);
-            setStatus('connected', 'Waiting for guests…');
-            setupHostListeners();
-            resolve();
-        });
+            peer.on('open', id => {
+                isHost = true;
+                console.log('[HOST] Successfully registered as host with ID:', id);
+                toast(`Room created! You are the Host. 🌙`, 'success', 5000);
+                setStatus('connected', 'Waiting for guests…');
+                setupHostListeners();
+                resolve();
+            });
 
-        peer.on('error', err => {
-            console.error('[PEER] PeerJS error:', err.type, err);
-            if (err.type === 'unavailable-id') {
-                isHost = false;
-                console.log('[GUEST] Host exists, joining as guest...');
-                peer = new Peer(peerConfig);
-                peer.on('open', id => {
-                    console.log('[GUEST] Successfully registered as guest with ID:', id);
-                    toast('Room already exists — joining as guest! 🚶', 'info', 4000);
-                    setStatus('connecting', 'Connecting to Host…');
-                    connectToHost();
+            peer.on('error', err => {
+                console.error('[HOST] PeerJS error:', err.type, err);
+                if (err.type === 'unavailable-id') {
+                    // Host ID is already taken (e.g. page reload or duplicate tab)
+                    toast('You are already connected to this room in another tab or device.', 'warning', 5000);
+                    setStatus('disconnected', 'Already connected elsewhere.');
                     resolve();
-                });
-                peer.on('error', guestErr => {
-                    console.error('[GUEST] Failed to register as guest:', guestErr);
+                } else {
                     toast('Network error connecting to server. Check console for details.', 'error');
-                });
-            } else {
-                toast('Network error connecting to server. Check console for details.', 'error');
-            }
-        });
+                }
+            });
 
-        peer.on('disconnected', () => {
-            console.warn('[PEER] Disconnected from signaling server, attempting reconnect...');
-            peer.reconnect();
-        });
+            peer.on('disconnected', () => {
+                console.warn('[HOST] Disconnected from signaling server, attempting reconnect...');
+                peer.reconnect();
+            });
+        } else {
+            console.log('[PEER] Initializing as Guest with random ID');
+            peer = new Peer(peerConfig);
+
+            peer.on('open', id => {
+                console.log('[GUEST] Successfully registered as guest with ID:', id);
+                setStatus('connecting', 'Connecting to Host…');
+                connectToHost();
+                resolve();
+            });
+
+            peer.on('error', err => {
+                console.error('[GUEST] Failed to register as guest:', err);
+                toast('Network error connecting to server. Check console for details.', 'error');
+            });
+
+            peer.on('disconnected', () => {
+                console.warn('[GUEST] Disconnected from signaling server, attempting reconnect...');
+                peer.reconnect();
+            });
+        }
     });
 }
 
@@ -799,8 +835,13 @@ function setupHostListeners() {
         conn.on('data', async msg => {
             // Guest sends 'auth_request'
             if (msg.type === 'auth_request') {
-                console.log('[HOST] Auth request from:', msg.name, 'avatar:', msg.avatar);
-                pendingAuthConns[conn.peer] = { conn, name: msg.name || 'Guest' };
+                console.log('[HOST] Auth request from:', msg.name, 'avatar:', msg.avatar, 'requestId:', msg.requestId);
+                pendingAuthConns[conn.peer] = {
+                    conn,
+                    name: msg.name || 'Guest',
+                    userId: msg.userId || null,
+                    requestId: msg.requestId || null
+                };
 
                 // Validate modal elements exist before showing
                 const authModal = document.getElementById('authModal');
@@ -1111,8 +1152,20 @@ setTimeout(() => {
     console.log('\n🔐 Room-code auth active! Type showSecurityStatus() for details.\n');
 }, 2000);
 
-function acceptPeer(conn, guestName) {
+function acceptPeer(conn, guestName, requestId) {
     const newPeerId = conn.peer;
+
+    // Approve the request in the database if there is a requestId
+    if (requestId && typeof api !== 'undefined') {
+        console.log('[DATABASE] Approving pending join request', requestId, 'for guest', guestName);
+        api.approveJoinRequest(requestId, true)
+            .then(res => {
+                console.log('[DATABASE] Successfully approved join request in db:', res);
+            })
+            .catch(err => {
+                console.error('[DATABASE] Failed to approve join request in db:', err);
+            });
+    }
 
     // Add to peersMap BEFORE sending welcome to avoid race conditions
     peersMap[newPeerId] = { dataConn: conn, name: guestName, callConn: null, stream: null };
@@ -1127,6 +1180,7 @@ function acceptPeer(conn, guestName) {
         conn.send({
             type: 'welcome',
             hostName: myName,
+            roomId: currentRoomId, // Send database room ID!
             peers: activePeers,
             hostPlaylists: roomPlaylists,
             ytState: { videoId: ytVideoId, time: ytPlayer?.getCurrentTime?.() || 0, playing: ytPlaying }
@@ -1190,8 +1244,14 @@ function connectToHost(retryCount = 0) {
             clearTimeout(connectionTimeout);
             connectionAttempts = 0;
             setStatus('connecting', 'Waiting for host approval...');
-            hostConn.send({ type: 'auth_request', name: myName, avatar: myAvatar });
-            console.log('[GUEST] auth_request sent successfully');
+            hostConn.send({
+                type: 'auth_request',
+                name: myName,
+                avatar: myAvatar,
+                userId: currentUserId,
+                requestId: pendingRequestId
+            });
+            console.log('[GUEST] auth_request sent successfully with requestId:', pendingRequestId);
         });
 
         hostConn.on('error', err => {
@@ -1238,6 +1298,13 @@ function connectToHost(retryCount = 0) {
                 console.log('[GUEST] Welcome received from host:', msg.hostName);
 
                 peersMap[hostId] = { dataConn: hostConn, name: msg.hostName || 'Host', callConn: null, stream: null };
+
+                if (msg.roomId) {
+                    currentRoomId = parseInt(msg.roomId);
+                    sessionStorage.setItem('currentRoomId', currentRoomId);
+                    console.log('[DATABASE] Received and stored room ID from host:', currentRoomId);
+                }
+                sessionStorage.removeItem('pendingRequestId');
 
                 if (msg.hostPlaylists) {
                     roomPlaylists = msg.hostPlaylists;

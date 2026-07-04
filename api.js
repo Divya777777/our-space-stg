@@ -278,6 +278,13 @@ class OurSpaceAPI {
     });
   }
 
+  async updateProfile(profileData) {
+    return await this.request('/users/me/profile', {
+      method: 'PUT',
+      body: JSON.stringify(profileData)
+    });
+  }
+
   async getUserActivity(limit = 10) {
     return await this.request(`/users/me/activity?limit=${limit}`);
   }

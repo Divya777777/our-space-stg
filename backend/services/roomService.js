@@ -222,14 +222,16 @@ async function joinRoom(userId, roomCode) {
         return {
           success: true,
           requiresApproval: true,
-          requestPending: true
+          requestPending: true,
+          requestId: existingRequest.request_id,
+          roomId: room.room_id.toString()
         };
       }
 
       const expiresAt = new Date();
       expiresAt.setMinutes(expiresAt.getMinutes() + 15); // 15 minute expiry
 
-      await prisma.pending_join_requests.create({
+      const pendingRequest = await prisma.pending_join_requests.create({
         data: {
           room_id: room.room_id,
           user_id: userId,
@@ -241,7 +243,9 @@ async function joinRoom(userId, roomCode) {
       return {
         success: true,
         requiresApproval: true,
-        requestCreated: true
+        requestCreated: true,
+        requestId: pendingRequest.request_id,
+        roomId: room.room_id.toString()
       };
     }
 

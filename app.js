@@ -77,8 +77,8 @@ async function handleGoogleSignIn(response) {
     localStorage.setItem('ourspace_userId', currentUser.userId);
     localStorage.setItem('ourspace_name', currentUser.name);
 
-    // Already authenticated, go straight to room step
-    showRoomStep();
+    // Go to name selection step first to confirm/choose name
+    showNameStep();
 
     // Load suggested rooms from database
     await loadSuggestedRooms();
@@ -110,7 +110,7 @@ function showNameStep() {
 
   // Pre-fill with Google name as suggestion
   const displayNameInput = document.getElementById('displayNameInput');
-  displayNameInput.value = currentUser?.name || '';
+  displayNameInput.value = currentUser?.name || localStorage.getItem('ourspace_name') || '';
   displayNameInput.focus();
   displayNameInput.select();
 }
@@ -212,14 +212,20 @@ async function enterRoom(roomCode) {
     }
 
     // Save to recent rooms (localStorage for quick access)
-    saveRecentRoom(name, cleanCode);
+    const displayRoomName = result.room?.roomName || `Room ${cleanCode}`;
+    saveRecentRoom(displayRoomName, cleanCode);
     localStorage.setItem('ourspace_name', name);
 
     // Store all user data in sessionStorage for room.js
     sessionStorage.setItem('currentRoomCode', cleanCode);
-    const roomIdToStore = result.room?.roomId || '';
+    const roomIdToStore = result.room?.roomId || result.roomId || '';
     console.log('[JOIN] Storing roomId in sessionStorage:', roomIdToStore, 'from result:', result);
     sessionStorage.setItem('currentRoomId', roomIdToStore);
+    if (result.requestId) {
+      sessionStorage.setItem('pendingRequestId', result.requestId);
+    } else {
+      sessionStorage.removeItem('pendingRequestId');
+    }
     sessionStorage.setItem('ourspace_name', name);
     sessionStorage.setItem('ourspace_userId', currentUser?.userId || localStorage.getItem('ourspace_userId') || '');
     sessionStorage.setItem('ourspace_avatar', currentUser?.avatar || localStorage.getItem('ourspace_avatar') || '');
@@ -307,6 +313,9 @@ async function loadSuggestedRooms() {
       `).join('');
 
       console.log(`[ROOMS] Loaded ${result.rooms.length} suggested rooms from database`);
+    } else {
+      // Fall back to localStorage recent rooms
+      renderRecentRooms();
     }
   } catch (err) {
     console.log('[ROOMS] Could not load suggested rooms:', err);
@@ -355,18 +364,42 @@ async function loadSuggestedRooms() {
 // ──────────────────────────────────────────────────────
 
 // Continue from name step to room step
-document.getElementById('continueToRoomBtn').addEventListener('click', () => {
+document.getElementById('continueToRoomBtn').addEventListener('click', async () => {
   const displayName = document.getElementById('displayNameInput').value.trim();
   if (!displayName) {
     shake('displayNameInput');
     return;
   }
 
-  // Store the user-chosen name
-  currentUser.name = displayName;
-  localStorage.setItem('ourspace_name', displayName);
+  const continueBtn = document.getElementById('continueToRoomBtn');
+  const originalText = continueBtn.textContent;
+  continueBtn.disabled = true;
+  continueBtn.textContent = 'Saving...';
 
-  showRoomStep();
+  try {
+    const result = await api.updateProfile({ displayName });
+    if (result.success) {
+      console.log('[PROFILE] Updated display name in database successfully');
+    }
+  } catch (err) {
+    console.error('[PROFILE] Failed to update display name in database:', err);
+  } finally {
+    continueBtn.disabled = false;
+    continueBtn.textContent = originalText;
+
+    // Store the user-chosen name
+    if (currentUser) {
+      currentUser.name = displayName;
+    }
+    localStorage.setItem('ourspace_name', displayName);
+
+    showRoomStep();
+  }
+});
+
+// Edit name button from room selection screen
+document.getElementById('editNameBtn').addEventListener('click', () => {
+  showNameStep();
 });
 
 // Allow Enter key to submit name
@@ -407,7 +440,8 @@ document.getElementById('createBtn').addEventListener('click', async () => {
     console.log('[CREATE] Created room with code:', roomCode, 'and ID:', roomId);
 
     // Save to recent rooms
-    saveRecentRoom(name, roomCode);
+    const displayRoomName = result.room?.roomName || `Room ${roomCode}`;
+    saveRecentRoom(displayRoomName, roomCode);
     localStorage.setItem('ourspace_name', name);
 
     // Store all room data in sessionStorage for room.js
