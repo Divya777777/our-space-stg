@@ -212,7 +212,8 @@ const validateJoinApproval = [
     .isInt()
     .withMessage('Valid request ID is required'),
   body('approved')
-    .notEmpty()
+    .exists()
+    .withMessage('Approval status is required')
     .isBoolean()
     .withMessage('Approval status must be a boolean'),
   handleValidationErrors

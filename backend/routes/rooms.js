@@ -318,7 +318,7 @@ router.post('/join-requests/:requestId/approve', authenticate, validateJoinAppro
     const { requestId } = req.params;
     const { approved } = req.body;
 
-    const result = await handleJoinRequest(requestId, approved, parseInt(req.user.user_id));
+    const result = await handleJoinRequest(parseInt(requestId), approved, parseInt(req.user.user_id));
 
     if (!result.success) {
       return res.status(400).json(result);
