@@ -763,19 +763,30 @@ async function setupPeer() {
         debug: 0 // Set to 3 for verbose debugging if needed
     };
 
-    // Configure PeerJS server based on environment
+    // Configure PeerJS server dynamically based on environment and API configuration
     if (window.location.hostname === 'divya777777.github.io') {
         // Production: Use PeerJS cloud server (Railway WebSocket issues)
-        // PeerJS cloud is free and more reliable for WebRTC signaling
         console.log('[PEER] Using PeerJS cloud server (free, reliable)');
-        // Don't set host/port/path - use PeerJS cloud defaults
-    } else if (isLocalServer && window.location.port) {
-        // Development: Use local backend
-        peerConfig.host = window.location.hostname;
-        peerConfig.port = 9000; // Backend PeerJS server port
-        peerConfig.path = '/peerjs';
-        peerConfig.secure = false;
-        console.log('[PEER] Using backend PeerJS server at:', `${peerConfig.host}:${peerConfig.port}${peerConfig.path}`);
+    } else if (typeof api !== 'undefined' && api.baseURL) {
+        try {
+            const baseOrigin = api.baseURL.replace(/\/api\/?$/, '');
+            const url = new URL(baseOrigin);
+            
+            peerConfig.host = url.hostname;
+            peerConfig.port = url.port ? parseInt(url.port) : (url.protocol === 'https:' ? 443 : 80);
+            peerConfig.path = '/peerjs';
+            peerConfig.secure = (url.protocol === 'https:');
+            
+            console.log('[PEER] Dynamically configured PeerJS using api.baseURL:', 
+                `${peerConfig.secure ? 'https' : 'http'}://${peerConfig.host}:${peerConfig.port}${peerConfig.path}`);
+        } catch (err) {
+            console.error('[PEER] Failed to parse api.baseURL for PeerJS configuration:', err);
+            // Fallback to PeerJS Cloud
+            delete peerConfig.host;
+            delete peerConfig.port;
+            delete peerConfig.path;
+            delete peerConfig.secure;
+        }
     } else {
         // Fallback: Use default PeerJS cloud
         console.log('[PEER] Using CLOUD PeerJS server (default)');
