@@ -859,10 +859,12 @@ async function setupPeer() {
 
                 peer.on('open', id => {
                     console.log('[GUEST] Successfully registered as guest with ID:', id);
-                    if (isAlreadyMember && !isHostOnline) {
-                        console.log('[GUEST] Host is offline and I am a member. Bypassing initial connection attempts.');
-                        setStatus('connected', 'Connected (Host Offline)');
-                        toast('Connected to room! The host is currently offline.', 'info', 5000);
+                    if (isAlreadyMember) {
+                        console.log('[GUEST] I am already a member. Entering room immediately and establishing silent connections.');
+                        setStatus('connected', isHostOnline ? 'Connected' : 'Connected (Host Offline)');
+                        if (!isHostOnline) {
+                            toast('Connected to room! The host is currently offline.', 'info', 5000);
+                        }
                         sessionStorage.removeItem('pendingRequestId');
                         
                         connectToOtherMembers();
