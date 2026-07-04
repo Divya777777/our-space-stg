@@ -295,7 +295,7 @@ function collapseAll() {
     });
     originalParents.clear();
     clearAncestorOverrides();
-    document.querySelectorAll('.expanded, .pip').forEach(el => el.classList.remove('expanded', 'pip'));
+    document.querySelectorAll('.expanded, .pip, .hidden-expanded').forEach(el => el.classList.remove('expanded', 'pip', 'hidden-expanded'));
     document.querySelectorAll('.expand-btn').forEach(b => { b.textContent = '⛶'; b.title = 'Maximize'; });
 
     const ytBtn = document.getElementById('ytExpandBtn');
@@ -324,11 +324,9 @@ document.getElementById('ytExpandBtn').addEventListener('click', () => {
 
     document.body.classList.add('has-expanded');
 
-    // PIP video panels
+    // Hide video panels instead of making them PIP
     Array.from(document.querySelectorAll('.video-panel')).forEach(vp => {
-        originalParents.set(vp, { parent: vp.parentNode, next: vp.nextSibling });
-        document.body.appendChild(vp);
-        vp.classList.add('pip');
+        vp.classList.add('hidden-expanded');
     });
 });
 
@@ -360,22 +358,12 @@ function togglePanelExpand(targetId, btn) {
     btn.title = 'Minimize';
     document.body.classList.add('has-expanded');
 
-    // PIP for video panels
-    if (targetId === 'ytPlayerWrapper') {
-        Array.from(document.querySelectorAll('.video-panel')).forEach(vp => {
-            originalParents.set(vp, { parent: vp.parentNode, next: vp.nextSibling });
-            document.body.appendChild(vp);
-            vp.classList.add('pip');
-        });
-    } else {
-        Array.from(document.querySelectorAll('.video-panel')).forEach(vp => {
-            if (vp.id !== targetId) {
-                originalParents.set(vp, { parent: vp.parentNode, next: vp.nextSibling });
-                document.body.appendChild(vp);
-                vp.classList.add('pip');
-            }
-        });
-    }
+    // Hide other video panels instead of making them PIP
+    Array.from(document.querySelectorAll('.video-panel')).forEach(vp => {
+        if (vp.id !== targetId) {
+            vp.classList.add('hidden-expanded');
+        }
+    });
 }
 
 document.querySelectorAll('.expand-btn').forEach(btn => {
@@ -383,16 +371,6 @@ document.querySelectorAll('.expand-btn').forEach(btn => {
         const targetId = btn.getAttribute('data-target');
         togglePanelExpand(targetId, btn);
     });
-});
-
-// Allow clicking a PIP to swap and maximize it instead
-document.body.addEventListener('click', (e) => {
-    const pipPanel = e.target.closest('.video-panel.pip');
-    if (pipPanel) {
-        // Find the expand button for this panel and click it
-        const btn = pipPanel.querySelector('.expand-btn');
-        if (btn) btn.click();
-    }
 });
 
 
@@ -3449,3 +3427,109 @@ setTimeout(() => {
 
 // Start Chat DB
 initChatDB();
+
+// ─────────────────────────────────────────────────────
+//  PICTURE-IN-PICTURE (OS-level floating video call preview)
+// ─────────────────────────────────────────────────────
+let pipInterval = null;
+
+function startPipCanvasRender() {
+    const canvas = document.getElementById('pipCanvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const pipVideo = document.getElementById('pipVideo');
+    if (!pipVideo) return;
+    
+    if (pipInterval) clearInterval(pipInterval);
+    
+    pipInterval = setInterval(() => {
+        // Find all active video elements inside video-panels (ignoring muted/disabled or empty states)
+        const videos = Array.from(document.querySelectorAll('.video-panel video'))
+            .filter(v => v.srcObject && v.srcObject.getVideoTracks().some(track => track.enabled) && v.readyState >= 2);
+        
+        // Clear canvas with spacey dark background
+        ctx.fillStyle = '#0d0c1d';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        if (videos.length === 0) {
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '20px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('No active cameras', canvas.width / 2, canvas.height / 2);
+            return;
+        }
+        
+        if (videos.length === 1) {
+            // Draw single video filling the screen
+            ctx.drawImage(videos[0], 0, 0, canvas.width, canvas.height);
+        } else if (videos.length === 2) {
+            // Draw side-by-side
+            ctx.drawImage(videos[0], 0, 0, canvas.width / 2, canvas.height);
+            ctx.drawImage(videos[1], canvas.width / 2, 0, canvas.width / 2, canvas.height);
+        } else {
+            // Draw 2x2 grid
+            ctx.drawImage(videos[0], 0, 0, canvas.width / 2, canvas.height / 2);
+            ctx.drawImage(videos[1], canvas.width / 2, 0, canvas.width / 2, canvas.height / 2);
+            if (videos[2]) ctx.drawImage(videos[2], 0, canvas.height / 2, canvas.width / 2, canvas.height / 2);
+            if (videos[3]) ctx.drawImage(videos[3], canvas.width / 2, canvas.height / 2, canvas.width / 2, canvas.height / 2);
+        }
+    }, 1000 / 30); // 30 FPS
+    
+    if (!pipVideo.srcObject) {
+        const stream = canvas.captureStream(30);
+        pipVideo.srcObject = stream;
+    }
+}
+
+// Hook up PIP button
+setTimeout(() => {
+    const pipBtn = document.getElementById('pipBtn');
+    const pipVideo = document.getElementById('pipVideo');
+    if (!pipBtn || !pipVideo) return;
+
+    pipBtn.addEventListener('click', async () => {
+        try {
+            if (document.pictureInPictureElement) {
+                await document.exitPictureInPicture();
+                pipBtn.classList.remove('active');
+            } else {
+                startPipCanvasRender();
+                await pipVideo.play();
+                await pipVideo.requestPictureInPicture();
+                pipBtn.classList.add('active');
+            }
+        } catch (err) {
+            console.error('[PIP] Failed to enter Picture-in-Picture:', err);
+            toast('Picture-in-Picture failed to start.', 'error');
+        }
+    });
+
+    pipVideo.addEventListener('leavepictureinpicture', () => {
+        pipBtn.classList.remove('active');
+        if (pipInterval) {
+            clearInterval(pipInterval);
+            pipInterval = null;
+        }
+    });
+
+    // Auto PIP on switching tabs
+    document.addEventListener('visibilitychange', async () => {
+        if (document.visibilityState === 'hidden') {
+            // Only auto-trigger if we have active cameras and are not already in PiP
+            const activeVideos = Array.from(document.querySelectorAll('.video-panel video'))
+                .filter(v => v.srcObject && v.srcObject.getVideoTracks().some(track => track.enabled) && v.readyState >= 2);
+            
+            if (activeVideos.length > 0 && !document.pictureInPictureElement) {
+                try {
+                    startPipCanvasRender();
+                    await pipVideo.play();
+                    await pipVideo.requestPictureInPicture();
+                    pipBtn.classList.add('active');
+                } catch (err) {
+                    console.log('[PIP] Auto-PIP blocked by browser (user interaction required):', err);
+                }
+            }
+        }
+    });
+}, 2000);

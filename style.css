@@ -721,6 +721,10 @@ body {
   transform: scaleX(-1);
 }
 
+.video-panel.hidden-expanded {
+  display: none !important;
+}
+
 /* ── Expand / Minimize button ─────────────────────── */
 .expand-btn {
   position: absolute;
@@ -977,6 +981,11 @@ body {
 .vc-btn.video-off {
   background: rgba(255, 80, 80, 0.4);
   border-color: rgba(255, 80, 80, 0.5);
+}
+
+.vc-btn.active {
+  background: var(--accent-purple);
+  border-color: rgba(155, 109, 255, 0.6);
 }
 
 /* Call actions */
