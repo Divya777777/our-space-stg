@@ -3579,15 +3579,7 @@ setTimeout(() => {
                 console.log('[PIP] No active video streams to pop out.');
             }
         } else {
-            // Document became visible - exit PiP if active
-            if (document.pictureInPictureElement) {
-                console.log('[PIP] Document visible again. Exiting Picture-in-Picture...');
-                try {
-                    await document.exitPictureInPicture();
-                } catch (err) {
-                    console.warn('[PIP] Failed to exit PiP:', err);
-                }
-            }
+            console.log('[PIP] Document visible again. Let browser handle native auto-PiP close.');
         }
     });
 }, 1000);
