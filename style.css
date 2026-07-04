@@ -673,8 +673,16 @@ body {
 .video-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  gap: 20px;
   flex: 1;
+  transition: all 0.4s cubic-bezier(0.165, 0.84, 0.44, 1);
+}
+
+.video-grid.alone {
+  grid-template-columns: 1fr;
+  max-width: 800px;
+  margin: 0 auto;
+  aspect-ratio: 16/10;
 }
 
 .video-panel {
@@ -684,7 +692,17 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(15, 12, 28, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  transition: all 0.3s cubic-bezier(0.165, 0.84, 0.44, 1);
+}
+
+.video-panel:hover {
+  transform: translateY(-2px);
+  border-color: rgba(155, 109, 255, 0.3);
+  box-shadow: 0 12px 40px rgba(155, 109, 255, 0.15);
 }
 
 .video-panel video {
@@ -692,13 +710,13 @@ body {
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: contain;
-  background: black;
+  object-fit: cover; /* IMMERSIVE FULL FRAME VIEW */
+  background: #0d0c1d;
   border-radius: inherit;
   display: none;
 }
 
-/* Mirror the local self-view (front camera appears natural, like a mirror) */
+/* Mirror the local self-view */
 #myVideo {
   transform: scaleX(-1);
 }
@@ -706,22 +724,23 @@ body {
 /* ── Expand / Minimize button ─────────────────────── */
 .expand-btn {
   position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(8px);
-  border: 1px solid var(--glass-border);
-  color: var(--text-secondary);
-  font-size: 0.85rem;
+  top: 14px;
+  right: 14px;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: rgba(13, 12, 29, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-size: 0.9rem;
   cursor: pointer;
   z-index: 10;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: var(--transition);
+  transition: all 0.2s ease;
   opacity: 0;
   line-height: 1;
 }
@@ -732,28 +751,42 @@ body {
 }
 
 .expand-btn:hover {
-  background: rgba(155, 109, 255, 0.4);
+  background: var(--accent-purple);
   color: #fff;
-  border-color: rgba(155, 109, 255, 0.5);
+  border-color: rgba(255, 255, 255, 0.2);
+  transform: scale(1.08);
 }
 
 /* ── Expanded state ───────────────────────────────── */
 .video-panel.expanded,
 .yt-player-wrapper.expanded {
   position: fixed;
-  inset: 80px 16px 16px;
+  inset: 90px 24px 24px;
   width: auto;
   height: auto;
   z-index: 200;
   aspect-ratio: unset !important;
-  border-radius: var(--radius-lg);
-  animation: expandIn 0.3s ease;
-  background: #000;
+  border-radius: 24px;
+  animation: expandIn 0.3s cubic-bezier(0.165, 0.84, 0.44, 1);
+  background: #09080f;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.8);
 }
 
 .video-panel.expanded .expand-btn,
 .yt-player-wrapper.expanded .expand-btn {
   opacity: 1;
+  top: 20px;
+  right: 20px;
+  background: rgba(255, 80, 80, 0.2);
+  border-color: rgba(255, 80, 80, 0.3);
+  color: #ff8080;
+}
+
+.video-panel.expanded .expand-btn:hover {
+  background: rgba(255, 80, 80, 0.4);
+  color: #fff;
+  border-color: rgba(255, 80, 80, 0.5);
 }
 
 /* Remove backdrop-filter from parents so position:fixed works from viewport */
@@ -766,23 +799,35 @@ body {
 .video-panel.pip {
   position: fixed;
   z-index: 210;
-  width: 160px;
-  height: 110px;
+  width: 220px;
+  height: 138px;
   aspect-ratio: unset;
-  border-radius: 12px;
+  border-radius: 16px;
   border: 2px solid rgba(155, 109, 255, 0.4);
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
-  animation: pipIn 0.3s ease;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6), 0 0 20px rgba(155, 109, 255, 0.15);
+  animation: pipIn 0.3s cubic-bezier(0.165, 0.84, 0.44, 1);
   overflow: hidden;
+  cursor: pointer;
+  /* Default position for any partner video panel PIP */
+  bottom: 24px;
+  right: 24px;
+  transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.video-panel.pip:hover {
+  transform: scale(1.04) translateY(-2px);
+  border-color: rgba(155, 109, 255, 0.8);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.7), 0 0 25px rgba(155, 109, 255, 0.3);
 }
 
 .video-panel.pip .video-placeholder {
-  transform: scale(0.5);
+  transform: scale(0.6);
 }
 
 .video-panel.pip .video-label {
-  font-size: 0.6rem;
-  padding: 2px 6px;
+  font-size: 0.7rem;
+  padding: 3px 8px;
+  background: rgba(0, 0, 0, 0.6);
 }
 
 .video-panel.pip .video-controls {
@@ -795,7 +840,7 @@ body {
 
 /* Position: stack them bottom-right */
 #myVideoPanel.pip {
-  bottom: 144px;
+  bottom: 180px;
   right: 24px;
 }
 
@@ -2843,6 +2888,7 @@ body {
 .chat-img-preview {
   cursor: pointer;
 }
+
 /* ── Members Panel ─────────────────────────────────────────── */
 .members-btn {
   position: relative;
@@ -2883,8 +2929,15 @@ body {
 }
 
 @keyframes pulse {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.1); }
+
+  0%,
+  100% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.1);
+  }
 }
 
 .members-overlay {
@@ -3075,8 +3128,15 @@ body {
 }
 
 @keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.3;
+  }
 }
 
 .member-actions {
@@ -3145,12 +3205,12 @@ body {
     width: 100%;
     right: -100%;
   }
-  
+
   .members-btn {
     padding: 8px 12px;
     font-size: 0.85rem;
   }
-  
+
   .members-btn svg {
     width: 16px;
     height: 16px;

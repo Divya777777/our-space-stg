@@ -335,49 +335,53 @@ document.getElementById('ytExpandBtn').addEventListener('click', () => {
 const ytCollapseBtn = document.getElementById('ytCollapseBtn');
 if (ytCollapseBtn) ytCollapseBtn.addEventListener('click', collapseAll);
 
-document.querySelectorAll('.expand-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-        const targetId = btn.getAttribute('data-target');
-        const panel = document.getElementById(targetId);
-        if (!panel) return;
+function togglePanelExpand(targetId, btn) {
+    const panel = document.getElementById(targetId);
+    if (!panel) return;
 
-        if (panel.classList.contains('expanded')) {
-            collapseAll();
-            return;
-        }
-
+    if (panel.classList.contains('expanded')) {
         collapseAll();
+        return;
+    }
 
-        // For YT player: don't move, override ancestors instead (moving kills iframe)
-        if (targetId === 'ytPlayerWrapper') {
-            overrideAncestors(panel);
-        } else {
-            // Video panels can be safely moved to body
-            originalParents.set(panel, { parent: panel.parentNode, next: panel.nextSibling });
-            document.body.appendChild(panel);
-        }
+    collapseAll();
 
-        panel.classList.add('expanded');
-        btn.textContent = '✕';
-        btn.title = 'Minimize';
-        document.body.classList.add('has-expanded');
+    // For YT player: don't move, override ancestors instead (moving kills iframe)
+    if (targetId === 'ytPlayerWrapper') {
+        overrideAncestors(panel);
+    } else {
+        // Video panels can be safely moved to body
+        originalParents.set(panel, { parent: panel.parentNode, next: panel.nextSibling });
+        document.body.appendChild(panel);
+    }
 
-        // PIP for video panels
-        if (targetId === 'ytPlayerWrapper') {
-            Array.from(document.querySelectorAll('.video-panel')).forEach(vp => {
+    panel.classList.add('expanded');
+    btn.textContent = '✕';
+    btn.title = 'Minimize';
+    document.body.classList.add('has-expanded');
+
+    // PIP for video panels
+    if (targetId === 'ytPlayerWrapper') {
+        Array.from(document.querySelectorAll('.video-panel')).forEach(vp => {
+            originalParents.set(vp, { parent: vp.parentNode, next: vp.nextSibling });
+            document.body.appendChild(vp);
+            vp.classList.add('pip');
+        });
+    } else {
+        Array.from(document.querySelectorAll('.video-panel')).forEach(vp => {
+            if (vp.id !== targetId) {
                 originalParents.set(vp, { parent: vp.parentNode, next: vp.nextSibling });
                 document.body.appendChild(vp);
                 vp.classList.add('pip');
-            });
-        } else {
-            Array.from(document.querySelectorAll('.video-panel')).forEach(vp => {
-                if (vp.id !== targetId) {
-                    originalParents.set(vp, { parent: vp.parentNode, next: vp.nextSibling });
-                    document.body.appendChild(vp);
-                    vp.classList.add('pip');
-                }
-            });
-        }
+            }
+        });
+    }
+}
+
+document.querySelectorAll('.expand-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const targetId = btn.getAttribute('data-target');
+        togglePanelExpand(targetId, btn);
     });
 });
 
@@ -1864,9 +1868,7 @@ function addVideoPanel(id, stream) {
         document.getElementById('videoGrid').appendChild(panel);
 
         panel.querySelector('.expand-btn').addEventListener('click', (e) => {
-            panel.classList.toggle('expanded');
-            document.body.classList.toggle('has-expanded', panel.classList.contains('expanded'));
-            e.target.innerHTML = panel.classList.contains('expanded') ? '✕' : '⛶';
+            togglePanelExpand(`panel_${id}`, e.target);
         });
     }
     const vid = document.getElementById(`video_${id}`);
