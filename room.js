@@ -3482,32 +3482,62 @@ function startPipCanvasRender() {
 
 // Hook up PIP button
 setTimeout(() => {
+    console.log('[PIP] Initializing Picture-in-Picture module...');
     const pipVideo = document.getElementById('pipVideo');
-    if (!pipVideo) return;
-
-    // Check browser compatibility and hide button if unsupported
-    const isPipSupported = typeof HTMLVideoElement.prototype.requestPictureInPicture === 'function';
-    if (!isPipSupported) {
-        console.log('[PIP] Native Video Picture-in-Picture not supported in this browser. Hiding button.');
+    if (!pipVideo) {
+        console.error('[PIP] ❌ pipVideo element not found in DOM!');
         return;
     }
 
+    const isPipSupported = typeof HTMLVideoElement.prototype.requestPictureInPicture === 'function';
+    console.log('[PIP] Browser support check - isPipSupported:', isPipSupported);
+
     // Auto PIP on switching tabs
     document.addEventListener('visibilitychange', async () => {
-        if (isInCall && document.visibilityState === 'hidden') {
-            // Only auto-trigger if we have active cameras and are not already in PiP
+        console.log('[PIP] 👁️ Visibility changed to:', document.visibilityState, '| active call:', isInCall);
+        
+        if (document.visibilityState === 'hidden') {
+            if (!isPipSupported) {
+                console.warn('[PIP] ⚠️ Cannot trigger PiP because this browser does not support the requestPictureInPicture API.');
+                return;
+            }
+
             const activeVideos = Array.from(document.querySelectorAll('.video-panel video'))
                 .filter(v => v.srcObject && v.srcObject.getVideoTracks().some(track => track.enabled) && v.readyState >= 2);
             
-            if (activeVideos.length > 0 && !document.pictureInPictureElement) {
+            console.log('[PIP] Active videos detected:', activeVideos.length);
+            activeVideos.forEach((v, index) => {
+                console.log(`[PIP] Video #${index} ID: ${v.id}, readyState: ${v.readyState}`);
+            });
+
+            if (activeVideos.length > 0) {
+                if (document.pictureInPictureElement) {
+                    console.log('[PIP] Already in Picture-in-Picture mode.');
+                    return;
+                }
+
                 try {
+                    console.log('[PIP] 🎬 Starting canvas render and requesting Picture-in-Picture...');
                     startPipCanvasRender();
                     await pipVideo.play();
                     await pipVideo.requestPictureInPicture();
+                    console.log('[PIP] ✅ Picture-in-Picture window opened!');
                 } catch (err) {
-                    console.log('[PIP] Auto-PIP blocked by browser (user interaction required):', err);
+                    console.error('[PIP] ❌ Auto-PIP request failed:', err);
+                }
+            } else {
+                console.log('[PIP] No active video streams to pop out.');
+            }
+        } else {
+            // Document became visible - exit PiP if active
+            if (document.pictureInPictureElement) {
+                console.log('[PIP] Document visible again. Exiting Picture-in-Picture...');
+                try {
+                    await document.exitPictureInPicture();
+                } catch (err) {
+                    console.warn('[PIP] Failed to exit PiP:', err);
                 }
             }
         }
     });
-}, 2000);
+}, 1000);
