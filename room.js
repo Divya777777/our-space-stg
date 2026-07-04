@@ -3492,6 +3492,33 @@ setTimeout(() => {
     const isPipSupported = typeof HTMLVideoElement.prototype.requestPictureInPicture === 'function';
     console.log('[PIP] Browser support check - isPipSupported:', isPipSupported);
 
+    if (isPipSupported) {
+        // Declarative auto-PiP support on active tiny video
+        pipVideo.autoPictureInPicture = true;
+
+        // Register MediaSession enterpictureinpicture action handler for Chrome/Edge integration
+        if ('mediaSession' in navigator) {
+            try {
+                navigator.mediaSession.setActionHandler('enterpictureinpicture', async () => {
+                    console.log('[MediaSession] enterpictureinpicture action triggered by browser');
+                    try {
+                        startPipCanvasRender();
+                        await pipVideo.play();
+                        await pipVideo.requestPictureInPicture();
+                        console.log('[MediaSession] Native PiP initiated successfully');
+                    } catch (e) {
+                        console.error('[MediaSession] Failed to enter PiP:', e);
+                    }
+                });
+                console.log('[MediaSession] Registered enterpictureinpicture action handler.');
+            } catch (err) {
+                console.warn('[MediaSession] Failed to register action handler:', err);
+            }
+        }
+    } else {
+        console.log('[PIP] Note: Programmatic PiP not supported in Firefox. Firefox users can hover over any active camera feed and click Firefox\'s native blue PiP button instead!');
+    }
+
     // Auto PIP on switching tabs
     document.addEventListener('visibilitychange', async () => {
         console.log('[PIP] 👁️ Visibility changed to:', document.visibilityState, '| active call:', isInCall);
@@ -3506,9 +3533,6 @@ setTimeout(() => {
                 .filter(v => v.srcObject && v.srcObject.getVideoTracks().some(track => track.enabled) && v.readyState >= 2);
             
             console.log('[PIP] Active videos detected:', activeVideos.length);
-            activeVideos.forEach((v, index) => {
-                console.log(`[PIP] Video #${index} ID: ${v.id}, readyState: ${v.readyState}`);
-            });
 
             if (activeVideos.length > 0) {
                 if (document.pictureInPictureElement) {
@@ -3523,7 +3547,11 @@ setTimeout(() => {
                     await pipVideo.requestPictureInPicture();
                     console.log('[PIP] ✅ Picture-in-Picture window opened!');
                 } catch (err) {
-                    console.error('[PIP] ❌ Auto-PIP request failed:', err);
+                    if (err.name === 'NotAllowedError') {
+                        console.log('[PIP] ℹ️ Auto-PIP requires user gesture or browser permission settings. Media session handles this in supported conditions.');
+                    } else {
+                        console.error('[PIP] ❌ Auto-PIP request failed:', err);
+                    }
                 }
             } else {
                 console.log('[PIP] No active video streams to pop out.');
