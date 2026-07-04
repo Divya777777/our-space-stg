@@ -3488,6 +3488,14 @@ setTimeout(() => {
     const pipVideo = document.getElementById('pipVideo');
     if (!pipBtn || !pipVideo) return;
 
+    // Check browser compatibility and hide button if unsupported
+    const isPipSupported = typeof HTMLVideoElement.prototype.requestPictureInPicture === 'function';
+    if (!isPipSupported) {
+        console.log('[PIP] Native Video Picture-in-Picture not supported in this browser. Hiding button.');
+        pipBtn.style.display = 'none';
+        return;
+    }
+
     pipBtn.addEventListener('click', async () => {
         try {
             if (document.pictureInPictureElement) {
