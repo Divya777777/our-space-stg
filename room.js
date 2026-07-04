@@ -3507,6 +3507,17 @@ setTimeout(() => {
         // Declarative auto-PiP support on active tiny video
         pipVideo.autoPictureInPicture = true;
 
+        // Force play when exiting PiP or paused by browser to keep stream active for next tab switch
+        pipVideo.addEventListener('leavepictureinpicture', () => {
+            console.log('[PIP] Left Picture-in-Picture. Replaying stream to keep it active...');
+            pipVideo.play().catch(e => console.log('[PIP] Failed to play after PiP exit:', e));
+        });
+
+        pipVideo.addEventListener('pause', () => {
+            console.log('[PIP] Video paused. Resuming to keep stream active...');
+            pipVideo.play().catch(e => {});
+        });
+
         // Register MediaSession enterpictureinpicture action handler for Chrome/Edge integration
         if ('mediaSession' in navigator) {
             try {
