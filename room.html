@@ -446,7 +446,7 @@
     <div class="toast-container" id="toastContainer"></div>
 
     <!-- Hidden canvas and video for PIP combining stream -->
-    <canvas id="pipCanvas" width="640" height="360" style="display:none;"></canvas>
+    <canvas id="pipCanvas" width="640" height="360" style="position:fixed;width:10px;height:10px;opacity:0.01;pointer-events:none;bottom:0;left:0;"></canvas>
     <video id="pipVideo" autoplay playsinline muted style="position:fixed;width:10px;height:10px;opacity:0.01;pointer-events:none;bottom:0;right:0;" autopictureinpicture></video>
 
     <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>

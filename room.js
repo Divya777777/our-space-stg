@@ -3440,6 +3440,20 @@ function startPipCanvasRender() {
     const pipVideo = document.getElementById('pipVideo');
     if (!pipVideo) return;
     
+    // Set dynamic size based on user's current display/screen size
+    const screenWidth = window.screen.width || 1920;
+    const pipWidth = Math.max(280, Math.round(screenWidth * 0.15)); // 15% of screen width, minimum 280px
+    const pipHeight = Math.round(pipWidth * (9 / 16));
+    
+    canvas.width = pipWidth;
+    canvas.height = pipHeight;
+    console.log(`[PIP] Canvas dimensions set to: ${pipWidth}x${pipHeight} based on screen width: ${screenWidth}`);
+
+    // Unconditionally set the canvas capture stream to warm up the video element
+    if (!pipVideo.srcObject) {
+        pipVideo.srcObject = canvas.captureStream(30);
+    }
+    
     if (pipInterval) clearInterval(pipInterval);
     
     pipInterval = setInterval(() => {
@@ -3455,7 +3469,7 @@ function startPipCanvasRender() {
             // Draw remote video as main video
             ctx.drawImage(remoteVideos[0], 0, 0, canvas.width, canvas.height);
 
-            // Draw local video as small box in corner
+            // Draw local video as small box in bottom right corner (1/4 of size)
             if (myVideo && myVideo.srcObject && myVideo.srcObject.getVideoTracks().some(track => track.enabled) && myVideo.readyState >= 2) {
                 const localVideoWidth = canvas.width / 4;
                 const localVideoHeight = canvas.height / 4;
@@ -3466,21 +3480,15 @@ function startPipCanvasRender() {
             ctx.drawImage(myVideo, 0, 0, canvas.width, canvas.height);
         } else {
             ctx.fillStyle = '#ffffff';
-            ctx.font = '20px sans-serif';
+            ctx.font = '14px sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText('No active cameras', canvas.width / 2, canvas.height / 2);
-            return;
         }
     }, 1000 / 30); // 30 FPS
-    
-    if (!pipVideo.srcObject) {
-        const stream = canvas.captureStream(30);
-        pipVideo.srcObject = stream;
-    }
 }
 
-// Hook up PIP button
+// Hook up PIP module
 setTimeout(() => {
     console.log('[PIP] Initializing Picture-in-Picture module...');
     const pipVideo = document.getElementById('pipVideo');
@@ -3491,6 +3499,9 @@ setTimeout(() => {
 
     const isPipSupported = typeof HTMLVideoElement.prototype.requestPictureInPicture === 'function';
     console.log('[PIP] Browser support check - isPipSupported:', isPipSupported);
+
+    // Warm up the canvas rendering loop immediately on page load
+    startPipCanvasRender();
 
     if (isPipSupported) {
         // Declarative auto-PiP support on active tiny video
