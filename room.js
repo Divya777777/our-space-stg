@@ -637,7 +637,6 @@ window.rejectPeerFromPanel = function(peerId) {
 // ─────────────────────────────────────────────────────
 let peer = null, localStream = null;
 let isMuted = false, isVideoOff = false, isInCall = false;
-let hasPipPermission = false;
 
 let hostId = '';
 let isHost = false;
@@ -1809,7 +1808,6 @@ async function answerIncomingCall(call) {
 
 async function startCall() {
     try {
-        hasPipPermission = true;
         const constraints = getMediaConstraints();
         localStream = await navigator.mediaDevices.getUserMedia(constraints);
         myVideo.srcObject = localStream;
@@ -3445,36 +3443,34 @@ function startPipCanvasRender() {
     if (pipInterval) clearInterval(pipInterval);
     
     pipInterval = setInterval(() => {
-        // Find all active video elements inside video-panels (ignoring muted/disabled or empty states)
-        const videos = Array.from(document.querySelectorAll('.video-panel video'))
+        const myVideo = document.getElementById('myVideo');
+        const remoteVideos = Array.from(document.querySelectorAll('.video-panel video:not(#myVideo)'))
             .filter(v => v.srcObject && v.srcObject.getVideoTracks().some(track => track.enabled) && v.readyState >= 2);
-        
+
         // Clear canvas with spacey dark background
         ctx.fillStyle = '#0d0c1d';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
-        if (videos.length === 0) {
+
+        if (remoteVideos.length > 0) {
+            // Draw remote video as main video
+            ctx.drawImage(remoteVideos[0], 0, 0, canvas.width, canvas.height);
+
+            // Draw local video as small box in corner
+            if (myVideo && myVideo.srcObject && myVideo.srcObject.getVideoTracks().some(track => track.enabled) && myVideo.readyState >= 2) {
+                const localVideoWidth = canvas.width / 4;
+                const localVideoHeight = canvas.height / 4;
+                ctx.drawImage(myVideo, canvas.width - localVideoWidth, canvas.height - localVideoHeight, localVideoWidth, localVideoHeight);
+            }
+        } else if (myVideo && myVideo.srcObject && myVideo.srcObject.getVideoTracks().some(track => track.enabled) && myVideo.readyState >= 2) {
+            // If no remote video, draw local video as main video
+            ctx.drawImage(myVideo, 0, 0, canvas.width, canvas.height);
+        } else {
             ctx.fillStyle = '#ffffff';
             ctx.font = '20px sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText('No active cameras', canvas.width / 2, canvas.height / 2);
             return;
-        }
-        
-        if (videos.length === 1) {
-            // Draw single video filling the screen
-            ctx.drawImage(videos[0], 0, 0, canvas.width, canvas.height);
-        } else if (videos.length === 2) {
-            // Draw side-by-side
-            ctx.drawImage(videos[0], 0, 0, canvas.width / 2, canvas.height);
-            ctx.drawImage(videos[1], canvas.width / 2, 0, canvas.width / 2, canvas.height);
-        } else {
-            // Draw 2x2 grid
-            ctx.drawImage(videos[0], 0, 0, canvas.width / 2, canvas.height / 2);
-            ctx.drawImage(videos[1], canvas.width / 2, 0, canvas.width / 2, canvas.height / 2);
-            if (videos[2]) ctx.drawImage(videos[2], 0, canvas.height / 2, canvas.width / 2, canvas.height / 2);
-            if (videos[3]) ctx.drawImage(videos[3], canvas.width / 2, canvas.height / 2, canvas.width / 2, canvas.height / 2);
         }
     }, 1000 / 30); // 30 FPS
     
@@ -3486,46 +3482,19 @@ function startPipCanvasRender() {
 
 // Hook up PIP button
 setTimeout(() => {
-    const pipBtn = document.getElementById('pipBtn');
     const pipVideo = document.getElementById('pipVideo');
-    if (!pipBtn || !pipVideo) return;
+    if (!pipVideo) return;
 
     // Check browser compatibility and hide button if unsupported
     const isPipSupported = typeof HTMLVideoElement.prototype.requestPictureInPicture === 'function';
     if (!isPipSupported) {
         console.log('[PIP] Native Video Picture-in-Picture not supported in this browser. Hiding button.');
-        pipBtn.style.display = 'none';
         return;
     }
 
-    pipBtn.addEventListener('click', async () => {
-        try {
-            if (document.pictureInPictureElement) {
-                await document.exitPictureInPicture();
-                pipBtn.classList.remove('active');
-            } else {
-                startPipCanvasRender();
-                await pipVideo.play();
-                await pipVideo.requestPictureInPicture();
-                pipBtn.classList.add('active');
-            }
-        } catch (err) {
-            console.error('[PIP] Failed to enter Picture-in-Picture:', err);
-            toast('Picture-in-Picture failed to start.', 'error');
-        }
-    });
-
-    pipVideo.addEventListener('leavepictureinpicture', () => {
-        pipBtn.classList.remove('active');
-        if (pipInterval) {
-            clearInterval(pipInterval);
-            pipInterval = null;
-        }
-    });
-
     // Auto PIP on switching tabs
     document.addEventListener('visibilitychange', async () => {
-        if (hasPipPermission && document.visibilityState === 'hidden') {
+        if (isInCall && document.visibilityState === 'hidden') {
             // Only auto-trigger if we have active cameras and are not already in PiP
             const activeVideos = Array.from(document.querySelectorAll('.video-panel video'))
                 .filter(v => v.srcObject && v.srcObject.getVideoTracks().some(track => track.enabled) && v.readyState >= 2);
@@ -3535,7 +3504,6 @@ setTimeout(() => {
                     startPipCanvasRender();
                     await pipVideo.play();
                     await pipVideo.requestPictureInPicture();
-                    pipBtn.classList.add('active');
                 } catch (err) {
                     console.log('[PIP] Auto-PIP blocked by browser (user interaction required):', err);
                 }
