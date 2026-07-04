@@ -175,20 +175,22 @@ async function joinRoom(userId, roomCode) {
       return { success: false, error: 'Room is no longer active' };
     }
 
-    // Check if already a member
+    // Check if already a member (regardless of left_at status)
     const existingMember = await prisma.room_members.findFirst({
       where: {
         room_id: room.room_id,
-        user_id: userId,
-        left_at: null
+        user_id: userId
       }
     });
 
     if (existingMember) {
-      // Update to online
+      // Update to online and clear left_at
       await prisma.room_members.update({
         where: { member_id: existingMember.member_id },
-        data: { is_online: true }
+        data: { 
+          is_online: true,
+          left_at: null
+        }
       });
 
       await recordVisit(userId, room.room_id);
@@ -349,16 +351,33 @@ async function handleJoinRequest(requestId, approved, hostUserId) {
       }
     });
 
-    // If approved, add as member
+    // If approved, add as member or update existing membership
     if (approved) {
-      await prisma.room_members.create({
-        data: {
+      const existingMember = await prisma.room_members.findFirst({
+        where: {
           room_id: request.room_id,
-          user_id: request.user_id,
-          role: 'member',
-          is_online: true
+          user_id: request.user_id
         }
       });
+
+      if (existingMember) {
+        await prisma.room_members.update({
+          where: { member_id: existingMember.member_id },
+          data: {
+            is_online: true,
+            left_at: null
+          }
+        });
+      } else {
+        await prisma.room_members.create({
+          data: {
+            room_id: request.room_id,
+            user_id: request.user_id,
+            role: 'member',
+            is_online: true
+          }
+        });
+      }
 
       await recordVisit(Number(request.user_id), Number(request.room_id));
     }

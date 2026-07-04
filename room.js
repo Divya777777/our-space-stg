@@ -9,6 +9,7 @@ const roomId = sessionStorage.getItem('currentRoomCode') || sessionStorage.getIt
 const myAvatar = sessionStorage.getItem('ourspace_avatar') || '';
 const currentUserId = sessionStorage.getItem('ourspace_userId') || '';
 const pendingRequestId = sessionStorage.getItem('pendingRequestId') || '';
+let isAlreadyMember = false;
 
 if (!roomId) { window.location.href = 'index.html'; }
 
@@ -723,7 +724,8 @@ async function setupPeer() {
         if (roomDetails && roomDetails.success && roomDetails.room) {
             const dbHostUserId = roomDetails.room.host.userId;
             isHost = (currentUserId.toString() === dbHostUserId.toString());
-            console.log('[PEER] Room host user ID:', dbHostUserId, 'My user ID:', currentUserId, 'Am I Host?', isHost);
+            isAlreadyMember = roomDetails.room.members.some(m => m.userId.toString() === currentUserId.toString());
+            console.log('[PEER] Room host user ID:', dbHostUserId, 'My user ID:', currentUserId, 'Am I Host?', isHost, 'Am I already a member?', isAlreadyMember);
         } else {
             console.warn('[PEER] Could not identify host from database response');
         }
@@ -778,7 +780,7 @@ async function setupPeer() {
             peer.on('open', id => {
                 isHost = true;
                 console.log('[HOST] Successfully registered as host with ID:', id);
-                toast(`Room created! You are the Host. 🌙`, 'success', 5000);
+                toast(`Connected as Host. 🌙`, 'success', 5000);
                 setStatus('connected', 'Waiting for guests…');
                 setupHostListeners();
                 resolve();
@@ -801,24 +803,67 @@ async function setupPeer() {
                 peer.reconnect();
             });
         } else {
-            console.log('[PEER] Initializing as Guest with random ID');
-            peer = new Peer(peerConfig);
+            // Generate predictable PeerJS ID based on room and user ID
+            hashRoomId(roomId).then(hashedRoom => {
+                const guestPeerId = hashedRoom + 'u' + currentUserId;
+                console.log('[PEER] Initializing as Guest with ID:', guestPeerId);
+                peer = new Peer(guestPeerId, peerConfig);
 
-            peer.on('open', id => {
-                console.log('[GUEST] Successfully registered as guest with ID:', id);
-                setStatus('connecting', 'Connecting to Host…');
-                connectToHost();
-                resolve();
-            });
+                // Set up guest-to-guest connection listener (exactly once)
+                peer.on('connection', conn => {
+                    console.log('[GUEST] Incoming connection from peer:', conn.peer);
+                    conn.on('data', async msg => {
+                        // Handle unencrypted peer intro
+                        if (msg.type === 'peer_intro') {
+                            setupGuestToGuest(conn, msg.name);
+                            toast(`${msg.name} joined!`, 'info');
+                            return;
+                        }
+                        // Handle sync health check
+                        if (msg.type === 'sync_ping') {
+                            conn.send({ type: 'sync_pong', ts: msg.ts, nonce: msg.nonce });
+                            return;
+                        }
+                        if (msg.type === 'sync_pong') {
+                            console.log('[SYNC] ✅ sync_pong from peer', conn.peer);
+                            return;
+                        }
 
-            peer.on('error', err => {
-                console.error('[GUEST] Failed to register as guest:', err);
-                toast('Network error connecting to server. Check console for details.', 'error');
-            });
+                        // Decrypt encrypted messages
+                        if (msg.type === 'encrypted') {
+                            const decrypted = await decryptData(msg.data);
+                            if (decrypted && peersMap[conn.peer]) {
+                                handleSyncMessage(decrypted, conn.peer);
+                            } else if (!decrypted) {
+                                console.error('[SYNC] ❌ Decryption FAILED from peer', conn.peer);
+                                toast('Sync error: could not decrypt message from partner', 'error');
+                            }
+                        } else if (peersMap[conn.peer]) {
+                            // Fallback for unencrypted messages
+                            handleSyncMessage(msg, conn.peer);
+                        }
+                    });
+                    conn.on('close', () => handlePeerDisconnect(conn.peer));
+                });
 
-            peer.on('disconnected', () => {
-                console.warn('[GUEST] Disconnected from signaling server, attempting reconnect...');
-                peer.reconnect();
+                peer.on('call', call => handleIncomingCall(call));
+
+                peer.on('open', id => {
+                    console.log('[GUEST] Successfully registered as guest with ID:', id);
+                    setStatus('connecting', 'Connecting to Host…');
+                    connectToHost();
+                    resolve();
+                });
+
+                peer.on('error', err => {
+                    console.error('[GUEST] Failed to register as guest:', err);
+                    toast('Network error connecting to server. Check console for details.', 'error');
+                });
+
+                peer.on('disconnected', () => {
+                    console.warn('[GUEST] Disconnected from signaling server, attempting reconnect...');
+                    peer.reconnect();
+                });
             });
         }
     });
@@ -1359,43 +1404,6 @@ function connectToHost(retryCount = 0) {
             endCall();
             toast('Host left the room.', 'error');
         });
-
-        peer.on('connection', conn => {
-            conn.on('data', async msg => {
-                // Handle unencrypted peer intro
-                if (msg.type === 'peer_intro') {
-                    setupGuestToGuest(conn, msg.name);
-                    toast(`${msg.name} joined!`, 'info');
-                    return;
-                }
-                // Handle sync health check
-                if (msg.type === 'sync_ping') {
-                    conn.send({ type: 'sync_pong', ts: msg.ts, nonce: msg.nonce });
-                    return;
-                }
-                if (msg.type === 'sync_pong') {
-                    console.log('[SYNC] ✅ sync_pong from peer', conn.peer);
-                    return;
-                }
-
-                // Decrypt encrypted messages
-                if (msg.type === 'encrypted') {
-                    const decrypted = await decryptData(msg.data);
-                    if (decrypted && peersMap[conn.peer]) {
-                        handleSyncMessage(decrypted, conn.peer);
-                    } else if (!decrypted) {
-                        console.error('[SYNC] ❌ Decryption FAILED from peer', conn.peer);
-                        toast('Sync error: could not decrypt message from partner', 'error');
-                    }
-                } else if (peersMap[conn.peer]) {
-                    // Fallback for unencrypted messages (backward compatibility)
-                    handleSyncMessage(msg, conn.peer);
-                }
-            });
-            conn.on('close', () => handlePeerDisconnect(conn.peer));
-        });
-
-        peer.on('call', call => handleIncomingCall(call));
     }, delay);
 }
 
@@ -1409,13 +1417,66 @@ function handleConnectionFailure(retryCount, error = null) {
         toast(`Connecting to room... (${retryCount + 2}/${MAX_CONNECTION_ATTEMPTS})`, 'info', 3000);
         connectToHost(retryCount + 1);
     } else {
-        console.error('[GUEST] Max connection attempts reached. Giving up.');
-        setStatus('disconnected', 'Room does not exist.');
-        toast('Room does not exist or Host disconnected. Redirecting...', 'error', 5000);
-        
-        setTimeout(() => {
-            window.location.href = 'index.html';
-        }, 3000);
+        if (isAlreadyMember) {
+            console.log('[GUEST] Max connection attempts reached, but user is an approved member. Access allowed (Host Offline).');
+            setStatus('connected', 'Connected (Host Offline)');
+            toast('Connected to room! The host is currently offline.', 'info', 5000);
+            sessionStorage.removeItem('pendingRequestId');
+            
+            // Periodically check/connect to other online members
+            connectToOtherMembers();
+            setInterval(connectToOtherMembers, 10000);
+        } else {
+            console.error('[GUEST] Max connection attempts reached. Giving up.');
+            setStatus('disconnected', 'Room does not exist.');
+            toast('Room does not exist or Host disconnected. Redirecting...', 'error', 5000);
+            
+            setTimeout(() => {
+                window.location.href = 'index.html';
+            }, 3000);
+        }
+    }
+}
+
+async function connectToOtherMembers() {
+    try {
+        console.log('[P2P] Attempting to discover other online members...');
+        const roomDetails = await api.getRoomByCode(roomId);
+        if (roomDetails && roomDetails.success && roomDetails.room) {
+            const members = roomDetails.room.members;
+            const hashedRoom = await hashRoomId(roomId);
+            
+            for (const member of members) {
+                const memberUserId = member.userId;
+                // Don't connect to ourselves, and only connect if the other member is online
+                if (memberUserId.toString() !== currentUserId.toString() && member.isOnline) {
+                    // Prevent duplicate P2P connection logic:
+                    // Only initiate connection if my userId is smaller than the other user's id
+                    if (parseInt(currentUserId) < parseInt(memberUserId)) {
+                        const targetPeerId = hashedRoom + 'u' + memberUserId;
+                        
+                        if (peersMap[targetPeerId]) {
+                            continue;
+                        }
+                        
+                        console.log(`[P2P] Connecting to peer member ${member.displayName} (${targetPeerId})...`);
+                        const conn = peer.connect(targetPeerId, { reliable: true, serialization: 'json' });
+                        
+                        conn.on('open', () => {
+                            console.log(`[P2P] Connection opened to peer member ${member.displayName}`);
+                            conn.send({ type: 'peer_intro', name: myName });
+                            setupGuestToGuest(conn, member.displayName);
+                        });
+                        
+                        conn.on('error', err => {
+                            console.warn(`[P2P] Connection error to peer member ${member.displayName}:`, err);
+                        });
+                    }
+                }
+            }
+        }
+    } catch (err) {
+        console.error('[P2P] Failed to connect to other members:', err);
     }
 }
 
