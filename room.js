@@ -1603,6 +1603,24 @@ async function connectToOtherMembers() {
                             updateMembersPanel();
                         }
                         setTimeout(() => sendSyncPing(hostConn), 1000);
+                        return;
+                    }
+
+                    // Handle all subsequent encrypted and sync messages from host
+                    if (msg.type === 'encrypted') {
+                        const decrypted = await decryptData(msg.data);
+                        if (decrypted && peersMap[hostId]) {
+                            if (decrypted.type === 'sync_test') {
+                                console.log('[SYNC] ✅ Encrypted test from host decrypted OK — E2E working!');
+                                toast('Sync connection verified ✅', 'success', 2000);
+                                return;
+                            }
+                            handleSyncMessage(decrypted, hostId);
+                        } else if (!decrypted) {
+                            console.error('[SYNC] ❌ Decryption FAILED for message from host');
+                        }
+                    } else if (peersMap[hostId]) {
+                        handleSyncMessage(msg, hostId);
                     }
                 });
             }
