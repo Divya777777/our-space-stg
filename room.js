@@ -9,7 +9,7 @@ const roomId = sessionStorage.getItem('currentRoomCode') || sessionStorage.getIt
 const myAvatar = sessionStorage.getItem('ourspace_avatar') || localStorage.getItem('ourspace_avatar') || '';
 const currentUserId = sessionStorage.getItem('ourspace_userId') || localStorage.getItem('ourspace_userId') || '';
 const pendingRequestId = sessionStorage.getItem('pendingRequestId') || localStorage.getItem('pendingRequestId') || '';
-let isAlreadyMember = false;
+let isAlreadyMember = localStorage.getItem('member_of_' + roomId) === 'true';
 
 if (!roomId) { window.location.href = 'index.html'; }
 
@@ -726,6 +726,11 @@ async function setupPeer() {
             const dbHostUserId = roomDetails.room.host.userId;
             isHost = (currentUserId.toString() === dbHostUserId.toString());
             isAlreadyMember = roomDetails.room.members.some(m => m.userId.toString() === currentUserId.toString());
+            if (isAlreadyMember) {
+                localStorage.setItem('member_of_' + roomId, 'true');
+            } else {
+                localStorage.removeItem('member_of_' + roomId);
+            }
             
             const hostMember = roomDetails.room.members.find(m => m.userId.toString() === dbHostUserId.toString());
             isHostOnline = hostMember ? hostMember.isOnline : false;
