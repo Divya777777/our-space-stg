@@ -4,23 +4,23 @@
    Room-code-only — no PIN required
    ===================================================== */
 
-const myName = sessionStorage.getItem('ourspace_name') || 'You';
-const roomId = sessionStorage.getItem('currentRoomCode') || sessionStorage.getItem('ourspace_room') || '';
-const myAvatar = sessionStorage.getItem('ourspace_avatar') || '';
-const currentUserId = sessionStorage.getItem('ourspace_userId') || '';
-const pendingRequestId = sessionStorage.getItem('pendingRequestId') || '';
+const myName = sessionStorage.getItem('ourspace_name') || localStorage.getItem('ourspace_name') || 'You';
+const roomId = sessionStorage.getItem('currentRoomCode') || sessionStorage.getItem('ourspace_room') || localStorage.getItem('currentRoomCode') || localStorage.getItem('ourspace_room') || '';
+const myAvatar = sessionStorage.getItem('ourspace_avatar') || localStorage.getItem('ourspace_avatar') || '';
+const currentUserId = sessionStorage.getItem('ourspace_userId') || localStorage.getItem('ourspace_userId') || '';
+const pendingRequestId = sessionStorage.getItem('pendingRequestId') || localStorage.getItem('pendingRequestId') || '';
 let isAlreadyMember = false;
 
 if (!roomId) { window.location.href = 'index.html'; }
 
 // ─── DATABASE INTEGRATION ────────────────────────────
-let currentRoomId = sessionStorage.getItem('currentRoomId');
+let currentRoomId = sessionStorage.getItem('currentRoomId') || localStorage.getItem('currentRoomId');
 if (currentRoomId) {
     currentRoomId = parseInt(currentRoomId);
     console.log('[DATABASE] Current room ID:', currentRoomId);
 } else {
     currentRoomId = null;
-    console.log('[DATABASE] No room ID found in session storage');
+    console.log('[DATABASE] No room ID found in session or local storage');
 }
 let roomStartTime = Date.now();
 let messageCache = [];
@@ -717,6 +717,7 @@ async function setupPeer() {
     setStatus('connecting', 'Connecting…');
     hostId = (await hashRoomId(roomId)) + 'h'; // PeerJS IDs: alphanumeric only, no underscores
 
+    let isHostOnline = true;
     // Fetch room details to identify the true host
     try {
         console.log('[PEER] Fetching room details to identify host...');
@@ -725,7 +726,15 @@ async function setupPeer() {
             const dbHostUserId = roomDetails.room.host.userId;
             isHost = (currentUserId.toString() === dbHostUserId.toString());
             isAlreadyMember = roomDetails.room.members.some(m => m.userId.toString() === currentUserId.toString());
-            console.log('[PEER] Room host user ID:', dbHostUserId, 'My user ID:', currentUserId, 'Am I Host?', isHost, 'Am I already a member?', isAlreadyMember);
+            
+            const hostMember = roomDetails.room.members.find(m => m.userId.toString() === dbHostUserId.toString());
+            isHostOnline = hostMember ? hostMember.isOnline : false;
+            
+            currentRoomId = parseInt(roomDetails.room.roomId);
+            sessionStorage.setItem('currentRoomId', currentRoomId);
+            localStorage.setItem('currentRoomId', currentRoomId);
+
+            console.log('[PEER] Room host user ID:', dbHostUserId, 'My user ID:', currentUserId, 'Am I Host?', isHost, 'Am I already a member?', isAlreadyMember, 'Is Host Online?', isHostOnline, 'Room ID:', currentRoomId);
         } else {
             console.warn('[PEER] Could not identify host from database response');
         }
@@ -850,9 +859,20 @@ async function setupPeer() {
 
                 peer.on('open', id => {
                     console.log('[GUEST] Successfully registered as guest with ID:', id);
-                    setStatus('connecting', 'Connecting to Host…');
-                    connectToHost();
-                    resolve();
+                    if (isAlreadyMember && !isHostOnline) {
+                        console.log('[GUEST] Host is offline and I am a member. Bypassing initial connection attempts.');
+                        setStatus('connected', 'Connected (Host Offline)');
+                        toast('Connected to room! The host is currently offline.', 'info', 5000);
+                        sessionStorage.removeItem('pendingRequestId');
+                        
+                        connectToOtherMembers();
+                        setInterval(connectToOtherMembers, 10000);
+                        resolve();
+                    } else {
+                        setStatus('connecting', 'Connecting to Host…');
+                        connectToHost();
+                        resolve();
+                    }
                 });
 
                 peer.on('error', err => {
@@ -881,6 +901,22 @@ function setupHostListeners() {
             // Guest sends 'auth_request'
             if (msg.type === 'auth_request') {
                 console.log('[HOST] Auth request from:', msg.name, 'avatar:', msg.avatar, 'requestId:', msg.requestId);
+                
+                // If guest is already a member, auto-accept immediately
+                try {
+                    const roomDetails = await api.getRoomByCode(roomId);
+                    if (roomDetails && roomDetails.success && roomDetails.room) {
+                        const isGuestAlreadyMember = roomDetails.room.members.some(m => m.userId.toString() === msg.userId.toString());
+                        if (isGuestAlreadyMember) {
+                            console.log('[HOST] Guest is already a member. Auto-accepting connection!');
+                            acceptPeer(conn, msg.name || 'Guest', msg.requestId);
+                            return;
+                        }
+                    }
+                } catch (err) {
+                    console.error('[HOST] Failed to verify guest membership status:', err);
+                }
+
                 pendingAuthConns[conn.peer] = {
                     conn,
                     name: msg.name || 'Guest',
@@ -1199,6 +1235,9 @@ setTimeout(() => {
 
 function acceptPeer(conn, guestName, requestId) {
     const newPeerId = conn.peer;
+    if (isHost) {
+        setStatus('connected', 'Connected');
+    }
 
     // Approve the request in the database if there is a requestId
     if (requestId && typeof api !== 'undefined') {
@@ -1446,6 +1485,100 @@ async function connectToOtherMembers() {
             const members = roomDetails.room.members;
             const hashedRoom = await hashRoomId(roomId);
             
+            // Try connecting to Host silently if they are online in DB but not connected in our peersMap
+            const dbHostUserId = roomDetails.room.host.userId;
+            const hostMember = members.find(m => m.userId.toString() === dbHostUserId.toString());
+            const isHostOnlineInDb = hostMember ? hostMember.isOnline : false;
+
+            if (!isHost && !peersMap[hostId] && isHostOnlineInDb) {
+                console.log('[P2P] Host is online in database but not connected. Attempting silent background reconnection to host...');
+                const hostConn = peer.connect(hostId, {
+                    reliable: true,
+                    serialization: 'json'
+                });
+
+                let silentTimeout = setTimeout(() => {
+                    console.log('[P2P] Silent host reconnection timeout.');
+                    hostConn.close();
+                }, 5000);
+
+                hostConn.on('open', () => {
+                    clearTimeout(silentTimeout);
+                    console.log('[P2P] Silent host reconnection opened. Authenticating...');
+                    hostConn.send({
+                        type: 'auth_request',
+                        name: myName,
+                        avatar: myAvatar,
+                        userId: currentUserId,
+                        requestId: pendingRequestId
+                    });
+                });
+
+                hostConn.on('error', err => {
+                    clearTimeout(silentTimeout);
+                    console.warn('[P2P] Silent host reconnection error:', err);
+                });
+
+                hostConn.on('close', () => {
+                    console.log('[GUEST] Host connection closed (silent)');
+                    if (peersMap[hostId]) {
+                        delete peersMap[hostId];
+                        setStatus('connected', 'Connected (Host Offline)');
+                        toast('Host left the room.', 'error');
+                    }
+                });
+
+                hostConn.on('data', async msg => {
+                    if (msg.type === 'welcome') {
+                        clearTimeout(silentTimeout);
+                        setStatus('connected', 'Connected to Room.');
+                        toast('Connected to Host! 🌙', 'success');
+                        
+                        peersMap[hostId] = { dataConn: hostConn, name: msg.hostName || 'Host', callConn: null, stream: null };
+                        
+                        if (msg.roomId) {
+                            currentRoomId = parseInt(msg.roomId);
+                            sessionStorage.setItem('currentRoomId', currentRoomId);
+                        }
+                        sessionStorage.removeItem('pendingRequestId');
+                        
+                        if (msg.hostPlaylists) {
+                            roomPlaylists = msg.hostPlaylists;
+                            savePlaylist(); renderPlaylist();
+                        }
+                        if (msg.ytState && msg.ytState.videoId) {
+                            loadYouTubeVideo(msg.ytState.videoId, msg.ytState.time, msg.ytState.playing);
+                        }
+                        
+                        if (msg.peers) {
+                            msg.peers.forEach(p => {
+                                const conn = peer.connect(p.id, { reliable: true, serialization: 'json' });
+                                conn.on('data', async m => {
+                                    if (m.type === 'peer_intro') {
+                                        setupGuestToGuest(conn, m.name);
+                                        toast(`${m.name} joined!`, 'info');
+                                        return;
+                                    }
+                                    if (m.type === 'encrypted') {
+                                        const dec = await decryptData(m.data);
+                                        if (dec && peersMap[conn.peer]) handleSyncMessage(dec, conn.peer);
+                                    } else if (peersMap[conn.peer]) {
+                                        handleSyncMessage(m, conn.peer);
+                                    }
+                                });
+                                conn.on('close', () => handlePeerDisconnect(conn.peer));
+                            });
+                        }
+                        
+                        renderChatRecipientDropdown();
+                        if (typeof updateMembersPanel === 'function') {
+                            updateMembersPanel();
+                        }
+                        setTimeout(() => sendSyncPing(hostConn), 1000);
+                    }
+                });
+            }
+
             for (const member of members) {
                 const memberUserId = member.userId;
                 // Don't connect to ourselves, and only connect if the other member is online
@@ -1532,6 +1665,11 @@ function handlePeerDisconnect(id) {
         // Update members panel when someone leaves
         if (typeof updateMembersPanel === 'function') {
             updateMembersPanel();
+        }
+
+        // Reset host status if no more guests connected
+        if (isHost && Object.keys(peersMap).length === 0) {
+            setStatus('connected', 'Waiting for guests…');
         }
     }
 }
