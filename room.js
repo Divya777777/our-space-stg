@@ -812,12 +812,14 @@ async function setupPeer() {
             });
 
             peer.on('error', err => {
-                console.error('[HOST] PeerJS error:', err.type, err);
+                console.error('[HOST] PeerJS error:', err.type || err);
                 if (err.type === 'unavailable-id') {
                     // Host ID is already taken (e.g. page reload or duplicate tab)
                     toast('You are already connected to this room in another tab or device.', 'warning', 5000);
                     setStatus('disconnected', 'Already connected elsewhere.');
                     resolve();
+                } else if (err.type === 'peer-unavailable') {
+                    console.log('[HOST] Tried to connect to offline guest (normal).');
                 } else {
                     toast('Network error connecting to server. Check console for details.', 'error');
                 }
@@ -894,8 +896,12 @@ async function setupPeer() {
                 });
 
                 peer.on('error', err => {
-                    console.error('[GUEST] Failed to register as guest:', err);
-                    toast('Network error connecting to server. Check console for details.', 'error');
+                    console.error('[GUEST] PeerJS error:', err.type || err);
+                    if (err.type === 'peer-unavailable') {
+                        console.log('[GUEST] Background reconnection target is offline (normal).');
+                    } else {
+                        toast('Network error connecting to server. Check console for details.', 'error');
+                    }
                 });
 
                 peer.on('disconnected', () => {
