@@ -637,6 +637,7 @@ window.rejectPeerFromPanel = function(peerId) {
 // ─────────────────────────────────────────────────────
 let peer = null, localStream = null;
 let isMuted = false, isVideoOff = false, isInCall = false;
+let hasPipPermission = false;
 
 let hostId = '';
 let isHost = false;
@@ -1808,6 +1809,7 @@ async function answerIncomingCall(call) {
 
 async function startCall() {
     try {
+        hasPipPermission = true;
         const constraints = getMediaConstraints();
         localStream = await navigator.mediaDevices.getUserMedia(constraints);
         myVideo.srcObject = localStream;
@@ -3523,7 +3525,7 @@ setTimeout(() => {
 
     // Auto PIP on switching tabs
     document.addEventListener('visibilitychange', async () => {
-        if (document.visibilityState === 'hidden') {
+        if (hasPipPermission && document.visibilityState === 'hidden') {
             // Only auto-trigger if we have active cameras and are not already in PiP
             const activeVideos = Array.from(document.querySelectorAll('.video-panel video'))
                 .filter(v => v.srcObject && v.srcObject.getVideoTracks().some(track => track.enabled) && v.readyState >= 2);
