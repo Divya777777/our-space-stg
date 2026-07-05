@@ -3432,11 +3432,87 @@ initChatDB();
 //  PICTURE-IN-PICTURE (OS-level floating video call preview)
 // ─────────────────────────────────────────────────────
 let pipInterval = null;
+let pipWindow = null;
+let pipCanvas = null;
+let pipCtx = null;
+let pipAnimationId = null;
+
+// Utility helper to draw video with object-fit: cover
+function drawVideoFitCover(activeCtx, activeCanvas, video, dx, dy, dWidth, dHeight) {
+    const videoWidth = video.videoWidth || 640;
+    const videoHeight = video.videoHeight || 360;
+    const videoRatio = videoWidth / videoHeight;
+    const destRatio = dWidth / dHeight;
+    
+    let sx, sy, sWidth, sHeight;
+    if (videoRatio > destRatio) {
+        sHeight = videoHeight;
+        sWidth = videoHeight * destRatio;
+        sx = (videoWidth - sWidth) / 2;
+        sy = 0;
+    } else {
+        sWidth = videoWidth;
+        sHeight = videoWidth / destRatio;
+        sx = 0;
+        sy = (videoHeight - sHeight) / 2;
+    }
+    activeCtx.drawImage(video, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight);
+}
+
+function renderPipFrame() {
+    const canvas = document.getElementById('pipCanvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    const activeCanvas = pipCanvas || canvas;
+    const activeCtx = pipCtx || ctx;
+
+    const myVideo = document.getElementById('myVideo');
+    const remoteVideos = Array.from(document.querySelectorAll('.video-panel video:not(#myVideo)'))
+        .filter(v => v.srcObject && v.srcObject.getVideoTracks().some(track => track.enabled) && v.readyState >= 2);
+
+    // Clear canvas
+    activeCtx.fillStyle = '#0d0c1d';
+    activeCtx.fillRect(0, 0, activeCanvas.width, activeCanvas.height);
+
+    if (remoteVideos.length > 0) {
+        // Draw remote video as main video (fit: cover)
+        drawVideoFitCover(activeCtx, activeCanvas, remoteVideos[0], 0, 0, activeCanvas.width, activeCanvas.height);
+
+        // Draw local video as small box in bottom right corner (1/4 of size)
+        if (myVideo && myVideo.srcObject && myVideo.srcObject.getVideoTracks().some(track => track.enabled) && myVideo.readyState >= 2) {
+            const localVideoWidth = activeCanvas.width / 4;
+            const localVideoHeight = activeCanvas.height / 4;
+            
+            // Draw a subtle border/outline around the local pip feed
+            activeCtx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+            activeCtx.lineWidth = 2;
+            
+            const px = activeCanvas.width - localVideoWidth - 8;
+            const py = activeCanvas.height - localVideoHeight - 8;
+            
+            activeCtx.strokeRect(px, py, localVideoWidth, localVideoHeight);
+            drawVideoFitCover(activeCtx, activeCanvas, myVideo, px, py, localVideoWidth, localVideoHeight);
+        }
+    } else if (myVideo && myVideo.srcObject && myVideo.srcObject.getVideoTracks().some(track => track.enabled) && myVideo.readyState >= 2) {
+        // If no remote video, draw local video as main video
+        drawVideoFitCover(activeCtx, activeCanvas, myVideo, 0, 0, activeCanvas.width, activeCanvas.height);
+    } else {
+        activeCtx.fillStyle = '#ffffff';
+        activeCtx.font = '14px sans-serif';
+        activeCtx.textAlign = 'center';
+        activeCtx.textBaseline = 'middle';
+        activeCtx.fillText('No active cameras', activeCanvas.width / 2, activeCanvas.height / 2);
+    }
+
+    if (pipWindow) {
+        pipAnimationId = pipWindow.requestAnimationFrame(renderPipFrame);
+    }
+}
 
 function startPipCanvasRender() {
     const canvas = document.getElementById('pipCanvas');
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
     const pipVideo = document.getElementById('pipVideo');
     if (!pipVideo) return;
     
@@ -3457,35 +3533,186 @@ function startPipCanvasRender() {
     if (pipInterval) clearInterval(pipInterval);
     
     pipInterval = setInterval(() => {
-        const myVideo = document.getElementById('myVideo');
-        const remoteVideos = Array.from(document.querySelectorAll('.video-panel video:not(#myVideo)'))
-            .filter(v => v.srcObject && v.srcObject.getVideoTracks().some(track => track.enabled) && v.readyState >= 2);
-
-        // Clear canvas with spacey dark background
-        ctx.fillStyle = '#0d0c1d';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        if (remoteVideos.length > 0) {
-            // Draw remote video as main video
-            ctx.drawImage(remoteVideos[0], 0, 0, canvas.width, canvas.height);
-
-            // Draw local video as small box in bottom right corner (1/4 of size)
-            if (myVideo && myVideo.srcObject && myVideo.srcObject.getVideoTracks().some(track => track.enabled) && myVideo.readyState >= 2) {
-                const localVideoWidth = canvas.width / 4;
-                const localVideoHeight = canvas.height / 4;
-                ctx.drawImage(myVideo, canvas.width - localVideoWidth, canvas.height - localVideoHeight, localVideoWidth, localVideoHeight);
-            }
-        } else if (myVideo && myVideo.srcObject && myVideo.srcObject.getVideoTracks().some(track => track.enabled) && myVideo.readyState >= 2) {
-            // If no remote video, draw local video as main video
-            ctx.drawImage(myVideo, 0, 0, canvas.width, canvas.height);
-        } else {
-            ctx.fillStyle = '#ffffff';
-            ctx.font = '14px sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText('No active cameras', canvas.width / 2, canvas.height / 2);
-        }
+        if (pipWindow) return; // Ignore if Document PiP is rendering instead
+        renderPipFrame();
     }, 1000 / 30); // 30 FPS
+}
+
+// Open Document Picture-in-Picture (Chrome/Edge)
+async function enterDocumentPip() {
+    if (pipWindow) return;
+
+    const screenWidth = window.screen.width || 1920;
+    const pipWidth = Math.max(320, Math.round(screenWidth * 0.20)); // 20% of screen width
+    const pipHeight = Math.round(pipWidth * (9 / 16));
+
+    try {
+        pipWindow = await window.documentPictureInPicture.requestWindow({
+            width: pipWidth,
+            height: pipHeight,
+        });
+
+        console.log('[PIP] Document PiP window opened:', pipWidth, 'x', pipHeight);
+
+        const doc = pipWindow.document;
+        doc.body.style.margin = '0';
+        doc.body.style.padding = '0';
+        doc.body.style.overflow = 'hidden';
+        doc.body.style.backgroundColor = '#0d0c1d';
+        doc.body.style.display = 'flex';
+        doc.body.style.alignItems = 'center';
+        doc.body.style.justifyContent = 'center';
+        doc.body.style.position = 'relative';
+
+        const style = doc.createElement('style');
+        style.textContent = `
+            .pip-container {
+                position: relative;
+                width: 100vw;
+                height: 100vh;
+                overflow: hidden;
+            }
+            canvas {
+                width: 100%;
+                height: 100%;
+                display: block;
+            }
+            .pip-overlay {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.5);
+                opacity: 0;
+                transition: opacity 0.2s ease;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                pointer-events: none;
+            }
+            .pip-container:hover .pip-overlay {
+                opacity: 1;
+                pointer-events: auto;
+            }
+            .expand-btn {
+                background: rgba(255, 255, 255, 0.2);
+                border: 1px solid rgba(255, 255, 255, 0.3);
+                border-radius: 50%;
+                width: 52px;
+                height: 52px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+                transition: all 0.2s ease;
+                color: #ffffff;
+                backdrop-filter: blur(8px);
+                box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+            }
+            .expand-btn:hover {
+                background: rgba(255, 255, 255, 0.4);
+                transform: scale(1.1);
+            }
+            .expand-btn svg {
+                width: 26px;
+                height: 26px;
+                fill: currentColor;
+            }
+        `;
+        doc.head.appendChild(style);
+
+        const container = doc.createElement('div');
+        container.className = 'pip-container';
+        doc.body.appendChild(container);
+
+        pipCanvas = doc.createElement('canvas');
+        pipCanvas.width = 640;
+        pipCanvas.height = 360;
+        container.appendChild(pipCanvas);
+        pipCtx = pipCanvas.getContext('2d');
+
+        const overlay = doc.createElement('div');
+        overlay.className = 'pip-overlay';
+        
+        const btn = doc.createElement('button');
+        btn.className = 'expand-btn';
+        btn.title = 'Back to Room';
+        btn.innerHTML = `
+            <svg viewBox="0 0 24 24">
+                <path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/>
+            </svg>
+        `;
+        
+        btn.addEventListener('click', () => {
+            console.log('[PIP] Back to room button clicked.');
+            window.focus();
+            pipWindow.close();
+        });
+        
+        overlay.appendChild(btn);
+        container.appendChild(overlay);
+
+        // Start rendering loop
+        renderPipFrame();
+
+        pipWindow.addEventListener('pagehide', () => {
+            console.log('[PIP] Document PiP window closed.');
+            if (pipAnimationId) {
+                pipWindow.cancelAnimationFrame(pipAnimationId);
+                pipAnimationId = null;
+            }
+            pipWindow = null;
+            pipCanvas = null;
+            pipCtx = null;
+        });
+
+    } catch (err) {
+        console.warn('[PIP] Document PiP failed, falling back to Video PiP:', err);
+        throw err;
+    }
+}
+
+// Trigger PiP in whichever mode is supported
+async function triggerPip() {
+    // Only trigger if we have active camera feeds
+    const activeVideos = Array.from(document.querySelectorAll('.video-panel video'))
+        .filter(v => v.srcObject && v.srcObject.getVideoTracks().some(track => track.enabled) && v.readyState >= 2);
+    
+    if (activeVideos.length === 0) {
+        console.log('[PIP] No active video streams to pop out.');
+        return;
+    }
+
+    // Try Document PiP first if supported
+    if ('documentPictureInPicture' in window) {
+        try {
+            await enterDocumentPip();
+            return;
+        } catch (e) {
+            // Fall through to Video PiP on failure
+        }
+    }
+
+    // Fallback to standard Video PiP
+    if (typeof HTMLVideoElement.prototype.requestPictureInPicture === 'function') {
+        if (document.pictureInPictureElement) {
+            console.log('[PIP] Already in Video Picture-in-Picture.');
+            return;
+        }
+        try {
+            console.log('[PIP] Requesting standard Video Picture-in-Picture...');
+            startPipCanvasRender();
+            await pipVideo.play();
+            await pipVideo.requestPictureInPicture();
+        } catch (err) {
+            if (err.name === 'NotAllowedError') {
+                console.log('[PIP] ℹ️ Auto-PIP requires user gesture or browser permission settings.');
+            } else {
+                console.error('[PIP] ❌ Video PiP failed:', err);
+            }
+        }
+    }
 }
 
 // Hook up PIP module
@@ -3523,14 +3750,7 @@ setTimeout(() => {
             try {
                 navigator.mediaSession.setActionHandler('enterpictureinpicture', async () => {
                     console.log('[MediaSession] enterpictureinpicture action triggered by browser');
-                    try {
-                        startPipCanvasRender();
-                        await pipVideo.play();
-                        await pipVideo.requestPictureInPicture();
-                        console.log('[MediaSession] Native PiP initiated successfully');
-                    } catch (e) {
-                        console.error('[MediaSession] Failed to enter PiP:', e);
-                    }
+                    await triggerPip();
                 });
                 console.log('[MediaSession] Registered enterpictureinpicture action handler.');
             } catch (err) {
@@ -3546,38 +3766,7 @@ setTimeout(() => {
         console.log('[PIP] 👁️ Visibility changed to:', document.visibilityState, '| active call:', isInCall);
         
         if (document.visibilityState === 'hidden') {
-            if (!isPipSupported) {
-                console.warn('[PIP] ⚠️ Cannot trigger PiP because this browser does not support the requestPictureInPicture API.');
-                return;
-            }
-
-            const activeVideos = Array.from(document.querySelectorAll('.video-panel video'))
-                .filter(v => v.srcObject && v.srcObject.getVideoTracks().some(track => track.enabled) && v.readyState >= 2);
-            
-            console.log('[PIP] Active videos detected:', activeVideos.length);
-
-            if (activeVideos.length > 0) {
-                if (document.pictureInPictureElement) {
-                    console.log('[PIP] Already in Picture-in-Picture mode.');
-                    return;
-                }
-
-                try {
-                    console.log('[PIP] 🎬 Starting canvas render and requesting Picture-in-Picture...');
-                    startPipCanvasRender();
-                    await pipVideo.play();
-                    await pipVideo.requestPictureInPicture();
-                    console.log('[PIP] ✅ Picture-in-Picture window opened!');
-                } catch (err) {
-                    if (err.name === 'NotAllowedError') {
-                        console.log('[PIP] ℹ️ Auto-PIP requires user gesture or browser permission settings. Media session handles this in supported conditions.');
-                    } else {
-                        console.error('[PIP] ❌ Auto-PIP request failed:', err);
-                    }
-                }
-            } else {
-                console.log('[PIP] No active video streams to pop out.');
-            }
+            await triggerPip();
         } else {
             console.log('[PIP] Document visible again. Let browser handle native auto-PiP close.');
         }
