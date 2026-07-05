@@ -3550,6 +3550,7 @@ async function enterDocumentPip() {
         pipWindow = await window.documentPictureInPicture.requestWindow({
             width: pipWidth,
             height: pipHeight,
+            disallowReturnToOpener: true,
         });
 
         console.log('[PIP] Document PiP window opened:', pipWidth, 'x', pipHeight);
