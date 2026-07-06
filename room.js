@@ -307,6 +307,14 @@ function collapseAll() {
     document.body.classList.remove('has-expanded');
 }
 
+function makePanelPip(vp) {
+    vp.classList.add('pip');
+    if (!originalParents.has(vp)) {
+        originalParents.set(vp, { parent: vp.parentNode, next: vp.nextSibling });
+    }
+    document.body.appendChild(vp);
+}
+
 // Custom listener for the ytExpandBtn 
 document.getElementById('ytExpandBtn').addEventListener('click', () => {
     const panel = document.getElementById('ytPlayerWrapper');
@@ -324,9 +332,9 @@ document.getElementById('ytExpandBtn').addEventListener('click', () => {
 
     document.body.classList.add('has-expanded');
 
-    // Make video panels PIP
+    // Make video panels PIP and move to body
     Array.from(document.querySelectorAll('.video-panel')).forEach(vp => {
-        vp.classList.add('pip');
+        makePanelPip(vp);
     });
 });
 
@@ -358,10 +366,10 @@ function togglePanelExpand(targetId, btn) {
     btn.title = 'Minimize';
     document.body.classList.add('has-expanded');
 
-    // Make other video panels PIP
+    // Make other video panels PIP and move to body
     Array.from(document.querySelectorAll('.video-panel')).forEach(vp => {
         if (vp.id !== targetId) {
-            vp.classList.add('pip');
+            makePanelPip(vp);
         }
     });
 }
@@ -1869,7 +1877,7 @@ function addVideoPanel(id, stream) {
         panel.className = 'video-panel';
         panel.id = `panel_${id}`;
         panel.innerHTML = `
-            <video id="video_${id}" autoplay playsinline class="video-element active"></video>
+            <video id="video_${id}" autoplay playsinline disablePictureInPicture class="video-element active"></video>
             <div class="video-label">${peersMap[id].name}</div>
             <button class="expand-btn" data-target="panel_${id}" title="Expand">⛶</button>
         `;
