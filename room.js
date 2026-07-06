@@ -3435,7 +3435,7 @@ let pipCtx = null;
 let pipAnimationId = null;
 
 // Utility helper to draw video with object-fit: cover
-function drawVideoFitCover(activeCtx, activeCanvas, video, dx, dy, dWidth, dHeight) {
+function drawVideoFitCover(activeCtx, activeCanvas, video, dx, dy, dWidth, dHeight, mirror = false) {
     const videoWidth = video.videoWidth || 640;
     const videoHeight = video.videoHeight || 360;
     const videoRatio = videoWidth / videoHeight;
@@ -3453,7 +3453,16 @@ function drawVideoFitCover(activeCtx, activeCanvas, video, dx, dy, dWidth, dHeig
         sx = 0;
         sy = (videoHeight - sHeight) / 2;
     }
-    activeCtx.drawImage(video, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight);
+
+    if (mirror) {
+        activeCtx.save();
+        activeCtx.translate(dx + dWidth / 2, dy + dHeight / 2);
+        activeCtx.scale(-1, 1);
+        activeCtx.drawImage(video, sx, sy, sWidth, sHeight, -dWidth / 2, -dHeight / 2, dWidth, dHeight);
+        activeCtx.restore();
+    } else {
+        activeCtx.drawImage(video, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight);
+    }
 }
 
 function renderPipFrame() {
@@ -3473,10 +3482,10 @@ function renderPipFrame() {
     activeCtx.fillRect(0, 0, activeCanvas.width, activeCanvas.height);
 
     if (remoteVideos.length > 0) {
-        // Draw remote video as main video (fit: cover)
-        drawVideoFitCover(activeCtx, activeCanvas, remoteVideos[0], 0, 0, activeCanvas.width, activeCanvas.height);
+        // Draw remote video as main video (fit: cover) - not mirrored
+        drawVideoFitCover(activeCtx, activeCanvas, remoteVideos[0], 0, 0, activeCanvas.width, activeCanvas.height, false);
 
-        // Draw local video as small box in bottom right corner (1/4 of size)
+        // Draw local video as small box in bottom right corner (1/4 of size) - mirrored
         if (myVideo && myVideo.srcObject && myVideo.srcObject.getVideoTracks().some(track => track.enabled) && myVideo.readyState >= 2) {
             const localVideoWidth = activeCanvas.width / 4;
             const localVideoHeight = activeCanvas.height / 4;
@@ -3489,11 +3498,11 @@ function renderPipFrame() {
             const py = activeCanvas.height - localVideoHeight - 8;
 
             activeCtx.strokeRect(px, py, localVideoWidth, localVideoHeight);
-            drawVideoFitCover(activeCtx, activeCanvas, myVideo, px, py, localVideoWidth, localVideoHeight);
+            drawVideoFitCover(activeCtx, activeCanvas, myVideo, px, py, localVideoWidth, localVideoHeight, true);
         }
     } else if (myVideo && myVideo.srcObject && myVideo.srcObject.getVideoTracks().some(track => track.enabled) && myVideo.readyState >= 2) {
-        // If no remote video, draw local video as main video
-        drawVideoFitCover(activeCtx, activeCanvas, myVideo, 0, 0, activeCanvas.width, activeCanvas.height);
+        // If no remote video, draw local video as main video - mirrored
+        drawVideoFitCover(activeCtx, activeCanvas, myVideo, 0, 0, activeCanvas.width, activeCanvas.height, true);
     } else {
         activeCtx.fillStyle = '#ffffff';
         activeCtx.font = '14px sans-serif';
