@@ -373,6 +373,21 @@ document.querySelectorAll('.expand-btn').forEach(btn => {
     });
 });
 
+// Add click listener to video panels to allow switching between them when in PIP mode
+document.querySelectorAll('.video-panel').forEach(panel => {
+    panel.addEventListener('click', (e) => {
+        // Only trigger switch if this panel is currently in PIP mode
+        if (panel.classList.contains('pip')) {
+            e.preventDefault();
+            e.stopPropagation();
+            const btn = panel.querySelector('.expand-btn');
+            if (btn) {
+                togglePanelExpand(panel.id, btn);
+            }
+        }
+    });
+});
+
 
 
 // ─── DOM REFS ─────────────────────────────────────────

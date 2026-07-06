@@ -848,7 +848,7 @@ body {
   right: 24px;
 }
 
-#partnerVideoPanel.pip {
+.video-panel.pip:not(#myVideoPanel) {
   bottom: 24px;
   right: 24px;
 }
@@ -2632,7 +2632,7 @@ body {
   grid-template-rows: 1fr;
 }
 
-.video-grid.alone #partnerVideoPanel {
+.video-grid.alone .video-panel:not(#myVideoPanel) {
   display: none !important;
 }
 
