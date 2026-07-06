@@ -324,9 +324,9 @@ document.getElementById('ytExpandBtn').addEventListener('click', () => {
 
     document.body.classList.add('has-expanded');
 
-    // Hide video panels instead of making them PIP
+    // Make video panels PIP
     Array.from(document.querySelectorAll('.video-panel')).forEach(vp => {
-        vp.classList.add('hidden-expanded');
+        vp.classList.add('pip');
     });
 });
 
@@ -358,10 +358,10 @@ function togglePanelExpand(targetId, btn) {
     btn.title = 'Minimize';
     document.body.classList.add('has-expanded');
 
-    // Hide other video panels instead of making them PIP
+    // Make other video panels PIP
     Array.from(document.querySelectorAll('.video-panel')).forEach(vp => {
         if (vp.id !== targetId) {
-            vp.classList.add('hidden-expanded');
+            vp.classList.add('pip');
         }
     });
 }
@@ -598,7 +598,7 @@ function updatePendingBadge() {
 }
 
 // Accept peer from panel
-window.acceptPeerFromPanel = function(peerId) {
+window.acceptPeerFromPanel = function (peerId) {
     const p = pendingAuthConns[peerId];
     if (p) {
         acceptPeer(p.conn, p.name, p.requestId);
@@ -613,7 +613,7 @@ window.acceptPeerFromPanel = function(peerId) {
 };
 
 // Reject peer from panel
-window.rejectPeerFromPanel = function(peerId) {
+window.rejectPeerFromPanel = function (peerId) {
     const p = pendingAuthConns[peerId];
     if (p) {
         p.conn.send({ type: 'auth_rejected' });
@@ -713,10 +713,10 @@ async function setupPeer() {
             } else {
                 localStorage.removeItem('member_of_' + roomId);
             }
-            
+
             const hostMember = roomDetails.room.members.find(m => m.userId.toString() === dbHostUserId.toString());
             isHostOnline = hostMember ? hostMember.isOnline : false;
-            
+
             currentRoomId = parseInt(roomDetails.room.roomId);
             sessionStorage.setItem('currentRoomId', currentRoomId);
             localStorage.setItem('currentRoomId', currentRoomId);
@@ -758,13 +758,13 @@ async function setupPeer() {
         try {
             const baseOrigin = api.baseURL.replace(/\/api\/?$/, '');
             const url = new URL(baseOrigin);
-            
+
             peerConfig.host = url.hostname;
             peerConfig.port = url.port ? parseInt(url.port) : (url.protocol === 'https:' ? 443 : 80);
             peerConfig.path = '/peerjs';
             peerConfig.secure = (url.protocol === 'https:');
-            
-            console.log('[PEER] Dynamically configured PeerJS using api.baseURL:', 
+
+            console.log('[PEER] Dynamically configured PeerJS using api.baseURL:',
                 `${peerConfig.secure ? 'https' : 'http'}://${peerConfig.host}:${peerConfig.port}${peerConfig.path}`);
         } catch (err) {
             console.error('[PEER] Failed to parse api.baseURL for PeerJS configuration:', err);
@@ -866,7 +866,7 @@ async function setupPeer() {
                             toast('Connected to room! The host is currently offline.', 'info', 5000);
                         }
                         sessionStorage.removeItem('pendingRequestId');
-                        
+
                         connectToOtherMembers();
                         setInterval(connectToOtherMembers, 10000);
                         resolve();
@@ -907,7 +907,7 @@ function setupHostListeners() {
             // Guest sends 'auth_request'
             if (msg.type === 'auth_request') {
                 console.log('[HOST] Auth request from:', msg.name, 'avatar:', msg.avatar, 'requestId:', msg.requestId);
-                
+
                 // If guest is already a member, auto-accept immediately
                 try {
                     const roomDetails = await api.getRoomByCode(roomId);
@@ -1467,7 +1467,7 @@ function handleConnectionFailure(retryCount, error = null) {
             setStatus('connected', 'Connected (Host Offline)');
             toast('Connected to room! The host is currently offline.', 'info', 5000);
             sessionStorage.removeItem('pendingRequestId');
-            
+
             // Periodically check/connect to other online members
             connectToOtherMembers();
             setInterval(connectToOtherMembers, 10000);
@@ -1475,7 +1475,7 @@ function handleConnectionFailure(retryCount, error = null) {
             console.error('[GUEST] Max connection attempts reached. Giving up.');
             setStatus('disconnected', 'Room does not exist.');
             toast('Room does not exist or Host disconnected. Redirecting...', 'error', 5000);
-            
+
             setTimeout(() => {
                 window.location.href = 'index.html';
             }, 3000);
@@ -1490,7 +1490,7 @@ async function connectToOtherMembers() {
         if (roomDetails && roomDetails.success && roomDetails.room) {
             const members = roomDetails.room.members;
             const hashedRoom = await hashRoomId(roomId);
-            
+
             // Try connecting to Host silently if they are online in DB but not connected in our peersMap
             const dbHostUserId = roomDetails.room.host.userId;
             const hostMember = members.find(m => m.userId.toString() === dbHostUserId.toString());
@@ -1539,15 +1539,15 @@ async function connectToOtherMembers() {
                         clearTimeout(silentTimeout);
                         setStatus('connected', 'Connected to Room.');
                         toast('Connected to Host! 🌙', 'success');
-                        
+
                         peersMap[hostId] = { dataConn: hostConn, name: msg.hostName || 'Host', callConn: null, stream: null };
-                        
+
                         if (msg.roomId) {
                             currentRoomId = parseInt(msg.roomId);
                             sessionStorage.setItem('currentRoomId', currentRoomId);
                         }
                         sessionStorage.removeItem('pendingRequestId');
-                        
+
                         if (msg.hostPlaylists) {
                             roomPlaylists = msg.hostPlaylists;
                             savePlaylist(); renderPlaylist();
@@ -1555,7 +1555,7 @@ async function connectToOtherMembers() {
                         if (msg.ytState && msg.ytState.videoId) {
                             loadYouTubeVideo(msg.ytState.videoId, msg.ytState.time, msg.ytState.playing);
                         }
-                        
+
                         if (msg.peers) {
                             msg.peers.forEach(p => {
                                 const conn = peer.connect(p.id, { reliable: true, serialization: 'json' });
@@ -1575,7 +1575,7 @@ async function connectToOtherMembers() {
                                 conn.on('close', () => handlePeerDisconnect(conn.peer));
                             });
                         }
-                        
+
                         renderChatRecipientDropdown();
                         if (typeof updateMembersPanel === 'function') {
                             updateMembersPanel();
@@ -1611,20 +1611,20 @@ async function connectToOtherMembers() {
                     // Only initiate connection if my userId is smaller than the other user's id
                     if (parseInt(currentUserId) < parseInt(memberUserId)) {
                         const targetPeerId = hashedRoom + 'u' + memberUserId;
-                        
+
                         if (peersMap[targetPeerId]) {
                             continue;
                         }
-                        
+
                         console.log(`[P2P] Connecting to peer member ${member.displayName} (${targetPeerId})...`);
                         const conn = peer.connect(targetPeerId, { reliable: true, serialization: 'json' });
-                        
+
                         conn.on('open', () => {
                             console.log(`[P2P] Connection opened to peer member ${member.displayName}`);
                             conn.send({ type: 'peer_intro', name: myName });
                             setupGuestToGuest(conn, member.displayName);
                         });
-                        
+
                         conn.on('error', err => {
                             console.warn(`[P2P] Connection error to peer member ${member.displayName}:`, err);
                         });
@@ -1780,18 +1780,18 @@ async function answerIncomingCall(call) {
     const id = call.peer;
     if (!peersMap[id]) return;
 
-        if (localStream) {
-            call.answer(localStream);
-            peersMap[id].callConn = call;
-            call.on('stream', stream => addVideoPanel(id, stream));
-            call.on('close', () => removeVideoPanel(id));
-        } else {
-            try {
-                const constraints = getMediaConstraints();
-                const stream = await navigator.mediaDevices.getUserMedia(constraints);
-                localStream = stream;
-                myVideo.srcObject = stream;
-                myVideo.classList.add('active');
+    if (localStream) {
+        call.answer(localStream);
+        peersMap[id].callConn = call;
+        call.on('stream', stream => addVideoPanel(id, stream));
+        call.on('close', () => removeVideoPanel(id));
+    } else {
+        try {
+            const constraints = getMediaConstraints();
+            const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            localStream = stream;
+            myVideo.srcObject = stream;
+            myVideo.classList.add('active');
             myPlaceholder.style.display = 'none';
             isInCall = true;
             startCallBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"/></svg> End Call`;
@@ -1870,7 +1870,7 @@ function addVideoPanel(id, stream) {
     const vid = document.getElementById(`video_${id}`);
     if (vid) {
         vid.srcObject = stream;
-        
+
         // Apply selected speaker if available
         const selectedAudioOutput = localStorage.getItem('ourspace_audio_out');
         if (selectedAudioOutput && selectedAudioOutput !== 'default' && typeof vid.setSinkId !== 'undefined') {
@@ -1967,20 +1967,20 @@ let selectedVideoInput = localStorage.getItem('ourspace_video_in') || 'default';
 
 function getMediaConstraints() {
     let audioConstraints = {
-        noiseSuppression: true, 
-        echoCancellation: true, 
+        noiseSuppression: true,
+        echoCancellation: true,
         autoGainControl: true
     };
-    
+
     if (selectedAudioInput && selectedAudioInput !== 'default') {
         audioConstraints.deviceId = selectedAudioInput;
     }
-    
+
     let videoConstraints = true;
     if (selectedVideoInput && selectedVideoInput !== 'default') {
         videoConstraints = { deviceId: selectedVideoInput };
     }
-    
+
     return { video: videoConstraints, audio: audioConstraints };
 }
 
@@ -1988,12 +1988,12 @@ async function populateDeviceLists() {
     try {
         // Request permissions first to get device labels and IDs (skip if already active)
         if (!localStream) {
-            const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true }); 
+            const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
             tempStream.getTracks().forEach(t => t.stop());
         }
-        
+
         const devices = await navigator.mediaDevices.enumerateDevices();
-        
+
         audioInputSelect.innerHTML = '<option value="default">Default</option>';
         audioOutputSelect.innerHTML = '<option value="default">Default</option>';
         videoInputSelect.innerHTML = '<option value="default">Default</option>';
@@ -2003,7 +2003,7 @@ async function populateDeviceLists() {
             const option = document.createElement('option');
             option.value = device.deviceId;
             option.text = device.label || `${device.kind} (${device.deviceId.substring(0, 5)}...)`;
-            
+
             if (device.kind === 'audioinput') {
                 audioInputSelect.appendChild(option);
             } else if (device.kind === 'audiooutput') {
@@ -2016,7 +2016,7 @@ async function populateDeviceLists() {
         if (selectedAudioInput) audioInputSelect.value = selectedAudioInput;
         if (selectedAudioOutput) audioOutputSelect.value = selectedAudioOutput;
         if (selectedVideoInput) videoInputSelect.value = selectedVideoInput;
-        
+
     } catch (e) {
         console.error('Error enumerating devices', e);
         toast('Please allow camera/mic permissions to see devices', 'error');
@@ -2049,20 +2049,20 @@ async function applyDeviceSettings() {
     if (isInCall && localStream) {
         try {
             const constraints = getMediaConstraints();
-            
+
             // Release hardware locks BEFORE requesting new streams.
             // This is critical for macOS and Linux to switch cameras/mics successfully.
             localStream.getTracks().forEach(t => t.stop());
-            
+
             const newStream = await navigator.mediaDevices.getUserMedia(constraints);
-            
+
             // Replace tracks for local video
             myVideo.srcObject = newStream;
-            
+
             // Replace tracks for all active peer connections
             const newAudioTrack = newStream.getAudioTracks()[0];
             const newVideoTrack = newStream.getVideoTracks()[0];
-            
+
             // Restore previous mute states
             if (newAudioTrack) newAudioTrack.enabled = !isMuted;
             if (newVideoTrack) newVideoTrack.enabled = !isVideoOff;
@@ -2072,7 +2072,7 @@ async function applyDeviceSettings() {
                     const senders = p.callConn.peerConnection.getSenders();
                     const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
                     const videoSender = senders.find(s => s.track && s.track.kind === 'video');
-                    
+
                     if (audioSender && newAudioTrack) audioSender.replaceTrack(newAudioTrack);
                     if (videoSender && newVideoTrack) videoSender.replaceTrack(newVideoTrack);
                 }
@@ -3355,7 +3355,7 @@ async function loadPlaylists() {
                         roomPlaylists['Room Playlist'] = [];
                         console.log('[PLAYLIST] Created default "Room Playlist" in database');
                     }
-                } catch (err) {}
+                } catch (err) { }
             }
 
             if (!playlistIdMap['Random']) {
@@ -3366,7 +3366,7 @@ async function loadPlaylists() {
                         personalPlaylists['Random'] = [];
                         console.log('[PLAYLIST] Created default "Random" personal playlist in database');
                     }
-                } catch (err) {}
+                } catch (err) { }
             }
         }
     } catch (err) {
@@ -3443,7 +3443,7 @@ function drawVideoFitCover(activeCtx, activeCanvas, video, dx, dy, dWidth, dHeig
     const videoHeight = video.videoHeight || 360;
     const videoRatio = videoWidth / videoHeight;
     const destRatio = dWidth / dHeight;
-    
+
     let sx, sy, sWidth, sHeight;
     if (videoRatio > destRatio) {
         sHeight = videoHeight;
@@ -3483,14 +3483,14 @@ function renderPipFrame() {
         if (myVideo && myVideo.srcObject && myVideo.srcObject.getVideoTracks().some(track => track.enabled) && myVideo.readyState >= 2) {
             const localVideoWidth = activeCanvas.width / 4;
             const localVideoHeight = activeCanvas.height / 4;
-            
+
             // Draw a subtle border/outline around the local pip feed
             activeCtx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
             activeCtx.lineWidth = 2;
-            
+
             const px = activeCanvas.width - localVideoWidth - 8;
             const py = activeCanvas.height - localVideoHeight - 8;
-            
+
             activeCtx.strokeRect(px, py, localVideoWidth, localVideoHeight);
             drawVideoFitCover(activeCtx, activeCanvas, myVideo, px, py, localVideoWidth, localVideoHeight);
         }
@@ -3515,12 +3515,12 @@ function startPipCanvasRender() {
     if (!canvas) return;
     const pipVideo = document.getElementById('pipVideo');
     if (!pipVideo) return;
-    
+
     // Set dynamic size based on user's current display/screen size
     const screenWidth = window.screen.width || 1920;
     const pipWidth = Math.max(280, Math.round(screenWidth * 0.15)); // 15% of screen width, minimum 280px
     const pipHeight = Math.round(pipWidth * (9 / 16));
-    
+
     canvas.width = pipWidth;
     canvas.height = pipHeight;
     console.log(`[PIP] Canvas dimensions set to: ${pipWidth}x${pipHeight} based on screen width: ${screenWidth}`);
@@ -3529,9 +3529,9 @@ function startPipCanvasRender() {
     if (!pipVideo.srcObject) {
         pipVideo.srcObject = canvas.captureStream(30);
     }
-    
+
     if (pipInterval) clearInterval(pipInterval);
-    
+
     pipInterval = setInterval(() => {
         if (pipWindow) return; // Ignore if Document PiP is rendering instead
         renderPipFrame();
@@ -3635,7 +3635,7 @@ async function enterDocumentPip() {
 
         const overlay = doc.createElement('div');
         overlay.className = 'pip-overlay';
-        
+
         const btn = doc.createElement('button');
         btn.className = 'expand-btn';
         btn.title = 'Back to Room';
@@ -3644,13 +3644,13 @@ async function enterDocumentPip() {
                 <path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/>
             </svg>
         `;
-        
+
         btn.addEventListener('click', () => {
             console.log('[PIP] Back to room button clicked.');
             window.focus();
             pipWindow.close();
         });
-        
+
         overlay.appendChild(btn);
         container.appendChild(overlay);
 
@@ -3679,7 +3679,7 @@ async function triggerPip() {
     // Only trigger if we have active camera feeds
     const activeVideos = Array.from(document.querySelectorAll('.video-panel video'))
         .filter(v => v.srcObject && v.srcObject.getVideoTracks().some(track => track.enabled) && v.readyState >= 2);
-    
+
     if (activeVideos.length === 0) {
         console.log('[PIP] No active video streams to pop out.');
         return;
@@ -3743,7 +3743,7 @@ setTimeout(() => {
 
         pipVideo.addEventListener('pause', () => {
             console.log('[PIP] Video paused. Resuming to keep stream active...');
-            pipVideo.play().catch(e => {});
+            pipVideo.play().catch(e => { });
         });
 
         // Register MediaSession enterpictureinpicture action handler for Chrome/Edge integration
@@ -3765,11 +3765,23 @@ setTimeout(() => {
     // Auto PIP on switching tabs
     document.addEventListener('visibilitychange', async () => {
         console.log('[PIP] 👁️ Visibility changed to:', document.visibilityState, '| active call:', isInCall);
-        
+
         if (document.visibilityState === 'hidden') {
             await triggerPip();
         } else {
             console.log('[PIP] Document visible again. Let browser handle native auto-PiP close.');
+            if (typeof pipWindow !== 'undefined' && pipWindow) {
+                console.log('[PIP] Explicitly closing Document PiP on visibility restored.');
+                pipWindow.close();
+            }
+        }
+    });
+
+    // Handle switching back to the app on macOS (window focus)
+    window.addEventListener('focus', () => {
+        if (typeof pipWindow !== 'undefined' && pipWindow) {
+            console.log('[PIP] Window focused. Explicitly closing Document PiP.');
+            pipWindow.close();
         }
     });
 }, 1000);
