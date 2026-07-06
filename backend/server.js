@@ -118,47 +118,7 @@ app.get('/', (req, res) => {
 // Error Handling
 // ====================
 
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    error: 'Endpoint not found',
-    path: req.path
-  });
-});
-
-// Global error handler
-app.use(async (err, req, res, next) => {
-  console.error('Error:', err);
-
-  // Log critical errors
-  if (err.status >= 500 || !err.status) {
-    await logAuditEvent({
-      userId: req.user?.user_id || null,
-      action: 'error',
-      details: {
-        message: err.message,
-        stack: err.stack,
-        path: req.path,
-        method: req.method
-      },
-      severity: Severity.ERROR
-    });
-  }
-
-  // Don't leak error details in production
-  const message = NODE_ENV === 'production'
-    ? 'An error occurred'
-    : err.message;
-
-  const statusCode = err.status || err.statusCode || 500;
-
-  res.status(statusCode).json({
-    success: false,
-    error: message,
-    ...(NODE_ENV === 'development' && { stack: err.stack })
-  });
-});
+// 404 and global error handlers are registered in startServer() after PeerJS is attached.
 
 // ====================
 // PeerJS Server Setup (will be attached to Express server)
@@ -257,6 +217,49 @@ async function startServer() {
     } catch (peerError) {
       console.error('⚠️ PeerJS server failed to initialize (non-fatal):', peerError.message);
     }
+
+    // Register 404 and error handlers at the very end of the stack (after PeerJS)
+    // 404 handler
+    app.use((req, res) => {
+      res.status(404).json({
+        success: false,
+        error: 'Endpoint not found',
+        path: req.path
+      });
+    });
+
+    // Global error handler
+    app.use(async (err, req, res, next) => {
+      console.error('Error:', err);
+
+      // Log critical errors
+      if (err.status >= 500 || !err.status) {
+        await logAuditEvent({
+          userId: req.user?.user_id || null,
+          action: 'error',
+          details: {
+            message: err.message,
+            stack: err.stack,
+            path: req.path,
+            method: req.method
+          },
+          severity: Severity.ERROR
+        });
+      }
+
+      // Don't leak error details in production
+      const message = NODE_ENV === 'production'
+        ? 'An error occurred'
+        : err.message;
+
+      const statusCode = err.status || err.statusCode || 500;
+
+      res.status(statusCode).json({
+        success: false,
+        error: message,
+        ...(NODE_ENV === 'development' && { stack: err.stack })
+      });
+    });
 
     // Graceful shutdown
     const gracefulShutdown = async (signal) => {
