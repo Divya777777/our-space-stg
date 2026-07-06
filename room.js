@@ -411,6 +411,10 @@ const videoBtn = document.getElementById('videoBtn');
 const startCallBtn = document.getElementById('startCallBtn');
 const leaveBtn = document.getElementById('leaveBtn');
 const copyRoomBtn = document.getElementById('copyRoomBtn');
+const screenShareBtn = document.getElementById('screenShareBtn');
+const screenShareMenu = document.getElementById('screenShareMenu');
+const presentingBanner = document.getElementById('presentingBanner');
+const stopPresentingBtn = document.getElementById('stopPresentingBtn');
 
 // YouTube DOM
 const ytUrlInput = document.getElementById('ytUrlInput');
@@ -660,6 +664,10 @@ window.rejectPeerFromPanel = function (peerId) {
 // ─────────────────────────────────────────────────────
 let peer = null, localStream = null;
 let isMuted = false, isVideoOff = false, isInCall = false;
+let isScreenSharing = false;
+let screenStream = null;
+let originalLocalStream = null;
+let audioContext = null;
 
 let hostId = '';
 let isHost = false;
@@ -1914,6 +1922,18 @@ function removeVideoPanel(id) {
 }
 
 function endCall() {
+    if (isScreenSharing) {
+        if (screenStream) {
+            screenStream.getTracks().forEach(t => t.stop());
+            screenStream = null;
+        }
+        if (audioContext) {
+            audioContext.close();
+            audioContext = null;
+        }
+        isScreenSharing = false;
+        originalLocalStream = null;
+    }
     if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
     myVideo.srcObject = null; myVideo.classList.remove('active'); myPlaceholder.style.display = 'flex';
 
@@ -2145,6 +2165,234 @@ videoBtn.addEventListener('click', () => {
     videoBtn.classList.toggle('video-off', isVideoOff);
     myVideo.classList.toggle('active', !isVideoOff);
     myPlaceholder.style.display = isVideoOff ? 'flex' : 'none';
+});
+
+// Screen sharing functions & listeners
+function mergeAudioStreams(micStream, screenStream) {
+    const micAudioTrack = micStream ? micStream.getAudioTracks()[0] : null;
+    const screenAudioTrack = screenStream ? screenStream.getAudioTracks()[0] : null;
+
+    if (micAudioTrack && screenAudioTrack) {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        
+        const micSource = audioContext.createMediaStreamSource(new MediaStream([micAudioTrack]));
+        const screenSource = audioContext.createMediaStreamSource(new MediaStream([screenAudioTrack]));
+        
+        const mixerDestination = audioContext.createMediaStreamDestination();
+        
+        micSource.connect(mixerDestination);
+        screenSource.connect(mixerDestination);
+        
+        return mixerDestination.stream.getAudioTracks()[0];
+    } else if (micAudioTrack) {
+        return micAudioTrack;
+    } else if (screenAudioTrack) {
+        return screenAudioTrack;
+    }
+    return null;
+}
+
+async function startScreenShare(displaySurface, shareAudio) {
+    try {
+        if (!isInCall) {
+            toast('You must be in a call to share your screen', 'error');
+            return;
+        }
+
+        const constraints = {
+            video: {
+                displaySurface: displaySurface,
+                width: { ideal: 1920 },
+                height: { ideal: 1080 },
+                frameRate: { ideal: 30 }
+            },
+            audio: shareAudio ? {
+                echoCancellation: true,
+                noiseSuppression: true
+            } : false
+        };
+
+        const stream = await navigator.mediaDevices.getDisplayMedia(constraints);
+        screenStream = stream;
+        isScreenSharing = true;
+
+        originalLocalStream = localStream;
+
+        const screenVideoTrack = stream.getVideoTracks()[0];
+        let audioTrackToSend = null;
+
+        if (localStream) {
+            const micTrack = localStream.getAudioTracks()[0];
+            const screenAudioTrack = stream.getAudioTracks()[0];
+            
+            if (micTrack && screenAudioTrack) {
+                audioTrackToSend = mergeAudioStreams(localStream, stream);
+            } else if (micTrack) {
+                audioTrackToSend = micTrack;
+            } else if (screenAudioTrack) {
+                audioTrackToSend = screenAudioTrack;
+            }
+        } else {
+            audioTrackToSend = stream.getAudioTracks()[0] || null;
+        }
+
+        const newLocalStream = new MediaStream();
+        if (screenVideoTrack) newLocalStream.addTrack(screenVideoTrack);
+        if (audioTrackToSend) newLocalStream.addTrack(audioTrackToSend);
+
+        myVideo.srcObject = newLocalStream;
+        myPlaceholder.style.display = 'none';
+        myVideo.classList.add('active');
+
+        // Replace tracks for all active peer connections
+        Object.values(peersMap).forEach(p => {
+            if (p.callConn && p.callConn.peerConnection) {
+                const senders = p.callConn.peerConnection.getSenders();
+                const videoSender = senders.find(s => s.track && s.track.kind === 'video');
+                const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
+
+                if (videoSender && screenVideoTrack) {
+                    videoSender.replaceTrack(screenVideoTrack);
+                }
+                if (audioSender && audioTrackToSend) {
+                    audioSender.replaceTrack(audioTrackToSend);
+                }
+            }
+        });
+
+        localStream = newLocalStream;
+
+        presentingBanner.style.display = 'flex';
+        screenShareBtn.classList.add('active');
+        screenShareBtn.style.background = 'rgba(155, 109, 255, 0.4)';
+        document.querySelector('#myVideoPanel .video-label').textContent = 'You (Presenting)';
+
+        screenVideoTrack.onended = () => {
+            stopScreenShare();
+        };
+
+        toast('Screen sharing started', 'success');
+    } catch (e) {
+        console.error('Error starting screen share:', e);
+        toast('Failed to share screen', 'error');
+        cleanupScreenShareState();
+    }
+}
+
+async function stopScreenShare() {
+    if (!isScreenSharing) return;
+
+    try {
+        if (screenStream) {
+            screenStream.getTracks().forEach(t => t.stop());
+            screenStream = null;
+        }
+
+        if (audioContext) {
+            audioContext.close();
+            audioContext = null;
+        }
+
+        if (originalLocalStream) {
+            myVideo.srcObject = originalLocalStream;
+            
+            const micTrack = originalLocalStream.getAudioTracks()[0];
+            const videoTrack = originalLocalStream.getVideoTracks()[0];
+            
+            if (videoTrack) {
+                videoTrack.enabled = !isVideoOff;
+                if (isVideoOff) {
+                    myPlaceholder.style.display = 'flex';
+                    myVideo.classList.remove('active');
+                } else {
+                    myPlaceholder.style.display = 'none';
+                    myVideo.classList.add('active');
+                }
+            }
+            if (micTrack) {
+                micTrack.enabled = !isMuted;
+            }
+
+            Object.values(peersMap).forEach(p => {
+                if (p.callConn && p.callConn.peerConnection) {
+                    const senders = p.callConn.peerConnection.getSenders();
+                    const videoSender = senders.find(s => s.track && s.track.kind === 'video');
+                    const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
+
+                    if (videoSender && videoTrack) {
+                        videoSender.replaceTrack(videoTrack);
+                    }
+                    if (audioSender && micTrack) {
+                        audioSender.replaceTrack(micTrack);
+                    }
+                }
+            });
+
+            localStream = originalLocalStream;
+        } else {
+            myVideo.srcObject = null;
+            myPlaceholder.style.display = 'flex';
+            myVideo.classList.remove('active');
+        }
+
+        presentingBanner.style.display = 'none';
+        screenShareBtn.classList.remove('active');
+        screenShareBtn.style.background = '';
+        document.querySelector('#myVideoPanel .video-label').textContent = 'You';
+
+        isScreenSharing = false;
+        originalLocalStream = null;
+        toast('Screen sharing stopped', 'success');
+    } catch (e) {
+        console.error('Error stopping screen share:', e);
+        cleanupScreenShareState();
+    }
+}
+
+function cleanupScreenShareState() {
+    isScreenSharing = false;
+    screenStream = null;
+    originalLocalStream = null;
+    if (audioContext) {
+        audioContext.close();
+        audioContext = null;
+    }
+    presentingBanner.style.display = 'none';
+    screenShareBtn.classList.remove('active');
+    screenShareBtn.style.background = '';
+    document.querySelector('#myVideoPanel .video-label').textContent = 'You';
+}
+
+if (screenShareBtn) {
+    screenShareBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (isScreenSharing) {
+            stopScreenShare();
+        } else {
+            screenShareMenu.classList.toggle('show');
+        }
+    });
+}
+
+if (stopPresentingBtn) {
+    stopPresentingBtn.addEventListener('click', stopScreenShare);
+}
+
+// Close menu when clicking outside
+document.addEventListener('click', (e) => {
+    if (screenShareMenu && !screenShareMenu.contains(e.target) && e.target !== screenShareBtn) {
+        screenShareMenu.classList.remove('show');
+    }
+});
+
+// Handle item selection in menu
+document.querySelectorAll('.ss-menu-item').forEach(item => {
+    item.addEventListener('click', () => {
+        const surface = item.getAttribute('data-surface');
+        const audio = item.getAttribute('data-audio') === 'true';
+        screenShareMenu.classList.remove('show');
+        startScreenShare(surface, audio);
+    });
 });
 
 // ─────────────────────────────────────────────────────

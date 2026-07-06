@@ -153,6 +153,11 @@
         </div>
     </header>
 
+    <div id="presentingBanner" class="presenting-banner" style="display: none;">
+        <span class="banner-text">You are presenting your screen</span>
+        <button id="stopPresentingBtn" class="stop-presenting-btn">Stop sharing</button>
+    </div>
+
     <!-- Main layout -->
     <main class="room-main">
 
@@ -166,6 +171,39 @@
                 </div>
                 <div class="video-label">You</div>
                 <button class="expand-btn" data-target="myVideoPanel" title="Expand">⛶</button>
+                
+                <!-- Screenshare Options Menu -->
+                <div class="screenshare-menu glass-card" id="screenShareMenu">
+                    <button class="ss-menu-item" data-surface="monitor" data-audio="true">
+                        <span class="ss-icon">🖥️</span>
+                        <div class="ss-text">
+                            <span class="ss-title">Entire Screen + Audio</span>
+                            <span class="ss-subtitle">Share your entire desktop with sound</span>
+                        </div>
+                    </button>
+                    <button class="ss-menu-item" data-surface="monitor" data-audio="false">
+                        <span class="ss-icon">🖥️</span>
+                        <div class="ss-text">
+                            <span class="ss-title">Entire Screen (No Audio)</span>
+                            <span class="ss-subtitle">Share your entire desktop without sound</span>
+                        </div>
+                    </button>
+                    <button class="ss-menu-item" data-surface="window" data-audio="true">
+                        <span class="ss-icon">🪟</span>
+                        <div class="ss-text">
+                            <span class="ss-title">Window / Tab + Audio</span>
+                            <span class="ss-subtitle">Share a window or browser tab with sound</span>
+                        </div>
+                    </button>
+                    <button class="ss-menu-item" data-surface="window" data-audio="false">
+                        <span class="ss-icon">🪟</span>
+                        <div class="ss-text">
+                            <span class="ss-title">Window / Tab (No Audio)</span>
+                            <span class="ss-subtitle">Share a window or browser tab without sound</span>
+                        </div>
+                    </button>
+                </div>
+
                 <div class="video-controls">
                     <button class="vc-btn" id="muteBtn" title="Toggle mic">
                         <svg viewBox="0 0 24 24" fill="currentColor">
@@ -177,6 +215,11 @@
                         <svg viewBox="0 0 24 24" fill="currentColor">
                             <path
                                 d="M15 8v8H5V8h10m1-2H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4V7c0-.55-.45-1-1-1z" />
+                        </svg>
+                    </button>
+                    <button class="vc-btn" id="screenShareBtn" title="Share Screen">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.1-.9-2-2-2H4c-1.11 0-2 .89-2 2v10c0 1.1.89 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z"/>
                         </svg>
                     </button>
                 </div>
