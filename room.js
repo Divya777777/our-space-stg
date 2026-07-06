@@ -782,7 +782,10 @@ async function setupPeer() {
     };
 
     // Configure PeerJS server dynamically based on environment and API configuration
-    if (typeof api !== 'undefined' && api.baseURL) {
+    if (window.location.hostname === 'divya777777.github.io') {
+        // Production/Staging: Use PeerJS cloud server to prevent Railway WebSocket / firewall blocks in Germany
+        console.log('[PEER] Using PeerJS cloud server (free, reliable, global availability)');
+    } else if (typeof api !== 'undefined' && api.baseURL) {
         try {
             const baseOrigin = api.baseURL.replace(/\/api\/?$/, '');
             const url = new URL(baseOrigin);
