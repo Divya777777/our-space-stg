@@ -381,19 +381,20 @@ document.querySelectorAll('.expand-btn').forEach(btn => {
     });
 });
 
-// Add click listener to video panels to allow switching between them when in PIP mode
-document.querySelectorAll('.video-panel').forEach(panel => {
-    panel.addEventListener('click', (e) => {
-        // Only trigger switch if this panel is currently in PIP mode
-        if (panel.classList.contains('pip')) {
-            e.preventDefault();
-            e.stopPropagation();
-            const btn = panel.querySelector('.expand-btn');
-            if (btn) {
-                togglePanelExpand(panel.id, btn);
-            }
+// Add click listener using event delegation to allow switching between video panels when in PIP mode (works for dynamic remote panels too)
+document.addEventListener('click', (e) => {
+    const pipPanel = e.target.closest('.video-panel.pip');
+    if (pipPanel) {
+        // If clicking the expand button itself, let its own listener handle it
+        if (e.target.closest('.expand-btn')) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+        const btn = pipPanel.querySelector('.expand-btn');
+        if (btn) {
+            togglePanelExpand(pipPanel.id, btn);
         }
-    });
+    }
 });
 
 
