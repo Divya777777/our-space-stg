@@ -1328,7 +1328,7 @@ function acceptPeer(conn, guestName, requestId) {
     // Send sync ping to verify the connection works
     setTimeout(() => sendSyncPing(conn), 1000);
 
-    if (isInCall && localStream) {
+    if (isInCall && localStream && peersMap[newPeerId] && !peersMap[newPeerId].callConn) {
         const call = peer.call(newPeerId, localStream);
         if (call) handleOutboundCall(call, newPeerId);
     }
@@ -1452,6 +1452,18 @@ function connectToHost(retryCount = 0) {
                 }
 
                 setTimeout(() => sendSyncPing(hostConn), 1000);
+
+                if (isInCall && localStream && peersMap[hostId] && !peersMap[hostId].callConn) {
+                    console.log('[GUEST] Calling host...');
+                    const call = peer.call(hostId, localStream);
+                    if (call) handleOutboundCall(call, hostId);
+                }
+
+                // Start periodic member connection check
+                connectToOtherMembers();
+                if (!window.memberConnectInterval) {
+                    window.memberConnectInterval = setInterval(connectToOtherMembers, 10000);
+                }
                 return;
             }
 
@@ -1477,9 +1489,7 @@ function connectToHost(retryCount = 0) {
         hostConn.on('close', () => {
             console.log('[GUEST] Host connection closed');
             clearTimeout(connectionTimeout);
-            setStatus('disconnected', 'Host disconnected.');
-            endCall();
-            toast('Host left the room.', 'error');
+            handlePeerDisconnect(hostId);
         });
     }, delay);
 }
@@ -1559,11 +1569,7 @@ async function connectToOtherMembers() {
 
                 hostConn.on('close', () => {
                     console.log('[GUEST] Host connection closed (silent)');
-                    if (peersMap[hostId]) {
-                        delete peersMap[hostId];
-                        setStatus('connected', 'Connected (Host Offline)');
-                        toast('Host left the room.', 'error');
-                    }
+                    handlePeerDisconnect(hostId);
                 });
 
                 hostConn.on('data', async msg => {
@@ -1613,6 +1619,12 @@ async function connectToOtherMembers() {
                             updateMembersPanel();
                         }
                         setTimeout(() => sendSyncPing(hostConn), 1000);
+
+                        if (isInCall && localStream && peersMap[hostId] && !peersMap[hostId].callConn) {
+                            console.log('[GUEST] Calling host silently...');
+                            const call = peer.call(hostId, localStream);
+                            if (call) handleOutboundCall(call, hostId);
+                        }
                         return;
                     }
 
@@ -1670,7 +1682,20 @@ async function connectToOtherMembers() {
 }
 
 function setupGuestToGuest(conn, peerName) {
-    conn.on('open', () => { conn.send({ type: 'peer_intro', name: myName }); });
+    const onOpen = () => {
+        conn.send({ type: 'peer_intro', name: myName });
+        if (isInCall && localStream && peersMap[conn.peer] && !peersMap[conn.peer].callConn) {
+            console.log(`[P2P] Calling peer ${peerName} (${conn.peer})...`);
+            const call = peer.call(conn.peer, localStream);
+            if (call) handleOutboundCall(call, conn.peer);
+        }
+    };
+
+    if (conn.open) {
+        onOpen();
+    } else {
+        conn.on('open', onOpen);
+    }
     peersMap[conn.peer] = { dataConn: conn, name: peerName, callConn: null, stream: null };
 
     // Update members panel when guest-to-guest connection established
@@ -1714,6 +1739,9 @@ function setupGuestToGuest(conn, peerName) {
 function handlePeerDisconnect(id) {
     if (peersMap[id]) {
         toast(`${peersMap[id].name} left.`, 'info');
+        if (peersMap[id].callConn) {
+            try { peersMap[id].callConn.close(); } catch (e) {}
+        }
         removeVideoPanel(id);
         delete peersMap[id];
         renderChatRecipientDropdown();
@@ -1721,6 +1749,11 @@ function handlePeerDisconnect(id) {
         // Update members panel when someone leaves
         if (typeof updateMembersPanel === 'function') {
             updateMembersPanel();
+        }
+
+        // Update status for Guest if Host disconnected
+        if (!isHost && id === hostId) {
+            setStatus('connected', 'Connected (Host Offline)');
         }
 
         // Reset host status if no more guests connected
@@ -3179,6 +3212,24 @@ document.addEventListener('fullscreenchange', () => { if (!document.fullscreenEl
 //  BOOT
 // ─────────────────────────────────────────────────────
 (async () => {
+    // Ensure the database knows we are in the room and online
+    if (roomId && typeof api !== 'undefined') {
+        try {
+            console.log('[BOOT] Registering room entry in database for room:', roomId);
+            const joinResult = await api.joinRoom(roomId);
+            if (joinResult && joinResult.success && joinResult.room) {
+                currentRoomId = parseInt(joinResult.room.roomId);
+                sessionStorage.setItem('currentRoomId', currentRoomId);
+                localStorage.setItem('currentRoomId', currentRoomId);
+                isAlreadyMember = true;
+                localStorage.setItem('member_of_' + roomId, 'true');
+                console.log('[BOOT] Database room entry successful, room ID:', currentRoomId);
+            }
+        } catch (err) {
+            console.error('[BOOT] Failed to register room entry in database:', err);
+        }
+    }
+
     await setupPeer();
     loadPlaylist();
 
