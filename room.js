@@ -727,6 +727,41 @@ function sendSyncPing(conn) {
     console.log('[SYNC] 🏓 Sent sync_ping to verify connection');
 }
 
+// ─── PEERJS RECONNECTION MANAGER ─────────────────────────
+let reconnectTimer = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 5;
+
+function attemptReconnect() {
+    if (!peer || peer.destroyed) return;
+
+    if (peer.open) {
+        reconnectAttempts = 0;
+        return;
+    }
+
+    if (reconnectTimer) {
+        return; // Already scheduled
+    }
+
+    reconnectAttempts++;
+    if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+        console.error('[PEER] Max reconnect attempts reached. Please reload the page.');
+        toast('Connection to signaling server lost. Please refresh the page.', 'error', 10000);
+        setStatus('disconnected', 'Connection lost. Please refresh.');
+        return;
+    }
+
+    const delay = Math.min(1500 * Math.pow(2, reconnectAttempts - 1) + Math.random() * 1000, 15000);
+    console.warn(`[PEER] Attempting reconnect ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} in ${Math.round(delay)}ms...`);
+    
+    reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        if (!peer || peer.destroyed) return;
+        peer.reconnect();
+    }, delay);
+}
+
 async function setupPeer() {
     setStatus('connecting', 'Connecting…');
     hostId = (await hashRoomId(roomId)) + 'h'; // PeerJS IDs: alphanumeric only, no underscores
@@ -818,6 +853,8 @@ async function setupPeer() {
 
             peer.on('open', id => {
                 isHost = true;
+                reconnectAttempts = 0;
+                if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
                 console.log('[HOST] Successfully registered as host with ID:', id);
                 toast(`Connected as Host. 🌙`, 'success', 5000);
                 setStatus('connected', 'Waiting for guests…');
@@ -828,20 +865,28 @@ async function setupPeer() {
             peer.on('error', err => {
                 console.error('[HOST] PeerJS error:', err.type || err);
                 if (err.type === 'unavailable-id') {
-                    // Host ID is already taken (e.g. page reload or duplicate tab)
-                    toast('You are already connected to this room in another tab or device.', 'warning', 5000);
-                    setStatus('disconnected', 'Already connected elsewhere.');
-                    resolve();
+                    if (reconnectAttempts > 0) {
+                        console.warn('[HOST] Reconnect hit stale session on server. Retrying...');
+                        attemptReconnect();
+                    } else {
+                        // Host ID is already taken (e.g. page reload or duplicate tab)
+                        toast('You are already connected to this room in another tab or device.', 'warning', 5000);
+                        setStatus('disconnected', 'Already connected elsewhere.');
+                        resolve();
+                    }
                 } else if (err.type === 'peer-unavailable') {
                     console.log('[HOST] Tried to connect to offline guest (normal).');
                 } else {
                     toast('Network error connecting to server. Check console for details.', 'error');
+                    if (reconnectAttempts > 0 || !peer.open) {
+                        attemptReconnect();
+                    }
                 }
             });
 
             peer.on('disconnected', () => {
                 console.warn('[HOST] Disconnected from signaling server, attempting reconnect...');
-                peer.reconnect();
+                attemptReconnect();
             });
         } else {
             // Generate predictable PeerJS ID based on room and user ID
@@ -890,6 +935,8 @@ async function setupPeer() {
                 peer.on('call', call => handleIncomingCall(call));
 
                 peer.on('open', id => {
+                    reconnectAttempts = 0;
+                    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
                     console.log('[GUEST] Successfully registered as guest with ID:', id);
                     if (isAlreadyMember) {
                         console.log('[GUEST] I am already a member. Entering room immediately and establishing silent connections.');
@@ -911,16 +958,28 @@ async function setupPeer() {
 
                 peer.on('error', err => {
                     console.error('[GUEST] PeerJS error:', err.type || err);
-                    if (err.type === 'peer-unavailable') {
+                    if (err.type === 'unavailable-id') {
+                        if (reconnectAttempts > 0) {
+                            console.warn('[GUEST] Reconnect hit stale session on server. Retrying...');
+                            attemptReconnect();
+                        } else {
+                            toast('You are already connected to this room in another tab or device.', 'warning', 5000);
+                            setStatus('disconnected', 'Already connected elsewhere.');
+                            resolve();
+                        }
+                    } else if (err.type === 'peer-unavailable') {
                         console.log('[GUEST] Background reconnection target is offline (normal).');
                     } else {
                         toast('Network error connecting to server. Check console for details.', 'error');
+                        if (reconnectAttempts > 0 || !peer.open) {
+                            attemptReconnect();
+                        }
                     }
                 });
 
                 peer.on('disconnected', () => {
                     console.warn('[GUEST] Disconnected from signaling server, attempting reconnect...');
-                    peer.reconnect();
+                    attemptReconnect();
                 });
             });
         }
