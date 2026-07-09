@@ -2461,6 +2461,7 @@ let ytSyncHeartbeat = null;
 let ytAdPlaying = false;       // True when THIS user's player is showing an ad
 let ytAdOverlayShown = false;  // True when the overlay is shown (local OR remote ad)
 let ytAdCheckInterval = null;  // Polling interval for ad detection
+let ytWasPlayingBeforeAd = false; // Tracks if video was playing before ad interrupted
 
 // Load YouTube IFrame script dynamically
 const ytScript = document.createElement('script');
@@ -2693,23 +2694,21 @@ function stopSyncHeartbeat() {
 
 function startAdDetection() {
     stopAdDetection();
-    ytAdCheckInterval = setInterval(() => {
+    const checkAd = () => {
         if (!ytPlayer || !ytReady || !ytVideoId) return;
 
         let adDetected = false;
 
-        // Method 1: getAdState() — returns 1 when an ad is active (not available in all embeds)
+        // Method 1: getAdState() — returns 1 (playing), 2 (buffering), 3 (paused) when an ad is active
         if (typeof ytPlayer.getAdState === 'function') {
-            adDetected = ytPlayer.getAdState() === 1;
+            const adState = ytPlayer.getAdState();
+            adDetected = (adState === 1 || adState === 2 || adState === 3);
         }
 
         // Method 2: Compare current video_id with the loaded one
-        // During pre-roll/mid-roll ads, getVideoData().video_id can change or become empty
         if (!adDetected && typeof ytPlayer.getVideoData === 'function') {
             const data = ytPlayer.getVideoData();
             const currentId = data?.video_id || '';
-            // If we have a loaded video but the player reports a different/empty video_id
-            // AND the player is not in CUED or UNSTARTED state, an ad is likely playing
             if (currentId && currentId !== ytVideoId) {
                 const state = ytPlayer.getPlayerState();
                 if (state === YT.PlayerState.PLAYING || state === YT.PlayerState.BUFFERING) {
@@ -2719,11 +2718,8 @@ function startAdDetection() {
         }
 
         // Method 3: Check if the video duration suddenly changed to a very short value
-        // (ads are typically much shorter than the actual video)
         if (!adDetected && typeof ytPlayer.getDuration === 'function' && ytDuration > 0) {
             const currentDuration = ytPlayer.getDuration();
-            // If the reported duration drops to <30% of the known video duration
-            // and the video is playing, it's likely an ad
             if (currentDuration > 0 && currentDuration < ytDuration * 0.3 && ytDuration > 60) {
                 const state = ytPlayer.getPlayerState();
                 if (state === YT.PlayerState.PLAYING || state === YT.PlayerState.BUFFERING) {
@@ -2747,7 +2743,10 @@ function startAdDetection() {
             // Resume heartbeat
             if (ytPlaying) startSyncHeartbeat();
         }
-    }, 800);
+    };
+
+    checkAd(); // Run once immediately
+    ytAdCheckInterval = setInterval(checkAd, 800);
 }
 
 function stopAdDetection() {
@@ -2759,8 +2758,15 @@ function showAdOverlay(message) {
     if (!overlay) return;
     const textEl = overlay.querySelector('.ad-overlay-text');
     if (textEl && message) textEl.textContent = message;
-    overlay.style.display = 'flex';
+    
+    // Only show the overlay on our screen if WE are not the one playing the ad
+    if (!ytAdPlaying) {
+        overlay.style.display = 'flex';
+    } else {
+        overlay.style.display = 'none';
+    }
     ytAdOverlayShown = true;
+    
     // Pause our player while someone has an ad (keeps sync)
     if (ytPlayer && ytReady && !ytAdPlaying) {
         // Only pause if WE are not the one with the ad (our ad plays natively)
@@ -2884,6 +2890,10 @@ async function handleSyncMessage(msg, senderId) {
 
     // ── YouTube playback sync ─────────────────────────
     if (msg.type === 'yt_state') {
+        if (ytAdPlaying || ytAdOverlayShown) {
+            console.log('[YT-AD] Ignoring incoming yt_state sync during ad playback');
+            return;
+        }
         isSyncing = true;
         ytSyncText.textContent = `${msg.sentBy} ${msg.playing ? 'is playing' : 'paused'} 🌙`;
 
@@ -2911,6 +2921,7 @@ async function handleSyncMessage(msg, senderId) {
     // ── YouTube ad sync ───────────────────────────────
     if (msg.type === 'yt_ad_playing') {
         console.log(`[YT-AD] 📺 ${msg.sentBy} is watching an ad — pausing & showing overlay`);
+        ytWasPlayingBeforeAd = ytPlaying; // Save the state before the ad pause
         showAdOverlay(`Ad playing for ${msg.sentBy}…`);
         ytSyncText.textContent = `⏸ Waiting for ${msg.sentBy}'s ad to finish`;
         return;
@@ -2920,9 +2931,8 @@ async function handleSyncMessage(msg, senderId) {
         console.log(`[YT-AD] ✅ ${msg.sentBy}'s ad finished — resuming playback`);
         hideAdOverlay();
         ytSyncText.textContent = `Listening together 🌙`;
-        // Resume playback — the next heartbeat sync from the ad-sender
-        // will re-align positions automatically
-        if (ytPlayer && ytReady && ytPlaying) {
+        // Resume playback if it was active before the ad interrupted
+        if (ytPlayer && ytReady && ytWasPlayingBeforeAd) {
             try { ytPlayer.playVideo(); } catch (e) { }
         }
         return;
