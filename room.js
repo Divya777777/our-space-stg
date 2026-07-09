@@ -2535,10 +2535,9 @@ function onYtStateChange(event) {
         }
     }
 
-    // Only send sync to peers if this wasn't triggered by a sync message
-    // This prevents echo loops where peers keep syncing back and forth
-    // Also suppress during ads — ad sync handles pause/resume separately
-    if (!isSyncing && !ytAdPlaying && !ytAdOverlayShown) {
+    // Only send sync to peers if this wasn't triggered by a sync message, and the state is PLAYING or PAUSED.
+    // This prevents echo loops and avoids sending spurious pause syncs during loading/UNSTARTED transitions.
+    if (!isSyncing && !ytAdPlaying && !ytAdOverlayShown && (state === YT.PlayerState.PLAYING || state === YT.PlayerState.PAUSED)) {
         console.log('[YT] Sending sync to peers:', { playing: ytPlaying, currentTime });
         sendSync({
             type: 'yt_state',
@@ -2548,7 +2547,7 @@ function onYtStateChange(event) {
             sentBy: myName,
         });
     } else {
-        console.log('[YT] Skipping sync broadcast (triggered by peer sync or ad playing)');
+        console.log('[YT] Skipping sync broadcast (triggered by peer sync, ad playing, or transient state)');
     }
 }
 
@@ -2570,6 +2569,7 @@ async function loadYouTubeVideo(videoId, startSeconds = 0, autoplay = true) {
         return;
     }
     ytVideoId = videoId;
+    ytDuration = 0; // Reset video duration
     
     // Reset ad state when loading a new video
     ytAdPlaying = false;
@@ -2647,9 +2647,18 @@ function startYtTimer() {
             console.warn('[YT] Timer running but player not ready');
             return;
         }
+        if (ytAdPlaying) return;
+
         const cur = ytPlayer.getCurrentTime() || 0;
         const dur = ytPlayer.getDuration() || 0;
-        ytDuration = dur;
+        
+        // Prevent ad durations from overwriting the main video duration
+        if (dur > 0 && !ytAdPlaying) {
+            if (ytDuration === 0 || dur >= ytDuration) {
+                ytDuration = dur;
+            }
+        }
+        
         const pct = dur > 0 ? (cur / dur) * 100 : 0;
 
         // Update progress bar
