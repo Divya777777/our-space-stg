@@ -1326,6 +1326,60 @@ body {
   border: none;
 }
 
+/* ── YouTube Ad Sync Overlay ────────────────────────── */
+.yt-ad-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 210;
+  background: rgba(8, 5, 28, 0.92);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  animation: adOverlayIn 0.35s ease;
+}
+
+@keyframes adOverlayIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.ad-overlay-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
+  padding: 20px;
+}
+
+.ad-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid rgba(155, 109, 255, 0.2);
+  border-top-color: var(--accent-purple, #9b6dff);
+  border-radius: 50%;
+  animation: adSpin 0.9s linear infinite;
+}
+
+@keyframes adSpin {
+  to { transform: rotate(360deg); }
+}
+
+.ad-overlay-text {
+  font-family: 'Playfair Display', serif;
+  font-size: 1.05rem;
+  color: #fff;
+  letter-spacing: 0.02em;
+}
+
+.ad-overlay-sub {
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
 .yt-track-meta {
   overflow: hidden;
 }

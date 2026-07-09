@@ -274,6 +274,14 @@
                 <div class="yt-player-wrapper" id="ytPlayerWrapper">
                     <button class="yt-collapse-btn" id="ytCollapseBtn" title="Minimize YouTube">✕</button>
                     <div id="ytPlayer"></div>
+                    <!-- Ad sync overlay — shown when any member is watching an ad -->
+                    <div id="ytAdOverlay" class="yt-ad-overlay" style="display:none;">
+                        <div class="ad-overlay-content">
+                            <div class="ad-spinner"></div>
+                            <div class="ad-overlay-text">Ad playing for a member…</div>
+                            <div class="ad-overlay-sub">Video will resume when the ad ends</div>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="yt-track-meta" id="ytTrackMeta">
