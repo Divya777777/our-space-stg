@@ -884,7 +884,7 @@ async function setupPeer() {
                             handleSyncMessage(msg, conn.peer);
                         }
                     });
-                    conn.on('close', () => handlePeerDisconnect(conn.peer));
+                    conn.on('close', () => handlePeerDisconnect(conn.peer, conn));
                 });
 
                 peer.on('call', call => handleIncomingCall(call));
@@ -1024,7 +1024,7 @@ function setupHostListeners() {
 
         conn.on('close', () => {
             console.log('[HOST] Peer disconnected:', conn.peer);
-            handlePeerDisconnect(conn.peer);
+            handlePeerDisconnect(conn.peer, conn);
         });
 
         conn.on('error', (err) => {
@@ -1489,7 +1489,7 @@ function connectToHost(retryCount = 0) {
         hostConn.on('close', () => {
             console.log('[GUEST] Host connection closed');
             clearTimeout(connectionTimeout);
-            handlePeerDisconnect(hostId);
+            handlePeerDisconnect(hostId, hostConn);
         });
     }, delay);
 }
@@ -1525,6 +1525,8 @@ function handleConnectionFailure(retryCount, error = null) {
     }
 }
 
+let pendingHostReconnect = false;
+
 async function connectToOtherMembers() {
     try {
         console.log('[P2P] Attempting to discover other online members...');
@@ -1538,7 +1540,8 @@ async function connectToOtherMembers() {
             const hostMember = members.find(m => m.userId.toString() === dbHostUserId.toString());
             const isHostOnlineInDb = hostMember ? hostMember.isOnline : false;
 
-            if (!isHost && !peersMap[hostId] && isHostOnlineInDb) {
+            if (!isHost && !peersMap[hostId] && isHostOnlineInDb && !pendingHostReconnect) {
+                pendingHostReconnect = true;
                 console.log('[P2P] Host is online in database but not connected. Attempting silent background reconnection to host...');
                 const hostConn = peer.connect(hostId, {
                     reliable: true,
@@ -1547,6 +1550,7 @@ async function connectToOtherMembers() {
 
                 let silentTimeout = setTimeout(() => {
                     console.log('[P2P] Silent host reconnection timeout.');
+                    pendingHostReconnect = false;
                     hostConn.close();
                 }, 5000);
 
@@ -1564,17 +1568,20 @@ async function connectToOtherMembers() {
 
                 hostConn.on('error', err => {
                     clearTimeout(silentTimeout);
+                    pendingHostReconnect = false;
                     console.warn('[P2P] Silent host reconnection error:', err);
                 });
 
                 hostConn.on('close', () => {
                     console.log('[GUEST] Host connection closed (silent)');
-                    handlePeerDisconnect(hostId);
+                    pendingHostReconnect = false;
+                    handlePeerDisconnect(hostId, hostConn);
                 });
 
                 hostConn.on('data', async msg => {
                     if (msg.type === 'welcome') {
                         clearTimeout(silentTimeout);
+                        pendingHostReconnect = false;
                         setStatus('connected', 'Connected to Room.');
                         toast('Connected to Host! 🌙', 'success');
 
@@ -1610,7 +1617,7 @@ async function connectToOtherMembers() {
                                         handleSyncMessage(m, conn.peer);
                                     }
                                 });
-                                conn.on('close', () => handlePeerDisconnect(conn.peer));
+                                conn.on('close', () => handlePeerDisconnect(conn.peer, conn));
                             });
                         }
 
@@ -1732,15 +1739,21 @@ function setupGuestToGuest(conn, peerName) {
             handleSyncMessage(msg, conn.peer);
         }
     });
-    conn.on('close', () => handlePeerDisconnect(conn.peer));
+    conn.on('close', () => handlePeerDisconnect(conn.peer, conn));
     renderChatRecipientDropdown();
 }
 
-function handlePeerDisconnect(id) {
+function handlePeerDisconnect(id, closingConn) {
     if (peersMap[id]) {
+        // If a specific connection was provided, verify it is still the active one.
+        // A stale/timed-out connection closing should NOT tear down a newer active connection.
+        if (closingConn && peersMap[id].dataConn && peersMap[id].dataConn !== closingConn) {
+            console.log(`[PEER] Ignoring stale close event for ${peersMap[id].name} (${id}) — a newer connection is active.`);
+            return;
+        }
         toast(`${peersMap[id].name} left.`, 'info');
         if (peersMap[id].callConn) {
-            try { peersMap[id].callConn.close(); } catch (e) {}
+            try { peersMap[id].callConn.close(); } catch (e) { }
         }
         removeVideoPanel(id);
         delete peersMap[id];
@@ -2211,15 +2224,15 @@ function mergeAudioStreams(micStream, screenStream) {
 
     if (micAudioTrack && screenAudioTrack) {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        
+
         const micSource = audioContext.createMediaStreamSource(new MediaStream([micAudioTrack]));
         const screenSource = audioContext.createMediaStreamSource(new MediaStream([screenAudioTrack]));
-        
+
         const mixerDestination = audioContext.createMediaStreamDestination();
-        
+
         micSource.connect(mixerDestination);
         screenSource.connect(mixerDestination);
-        
+
         return mixerDestination.stream.getAudioTracks()[0];
     } else if (micAudioTrack) {
         return micAudioTrack;
@@ -2261,7 +2274,7 @@ async function startScreenShare(displaySurface, shareAudio) {
         if (localStream) {
             const micTrack = localStream.getAudioTracks()[0];
             const screenAudioTrack = stream.getAudioTracks()[0];
-            
+
             if (micTrack && screenAudioTrack) {
                 audioTrackToSend = mergeAudioStreams(localStream, stream);
             } else if (micTrack) {
@@ -2332,10 +2345,10 @@ async function stopScreenShare() {
 
         if (originalLocalStream) {
             myVideo.srcObject = originalLocalStream;
-            
+
             const micTrack = originalLocalStream.getAudioTracks()[0];
             const videoTrack = originalLocalStream.getVideoTracks()[0];
-            
+
             if (videoTrack) {
                 videoTrack.enabled = !isVideoOff;
                 if (isVideoOff) {
