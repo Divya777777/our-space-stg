@@ -1380,6 +1380,25 @@ body {
   color: rgba(255, 255, 255, 0.5);
 }
 
+.yt-report-ad-btn {
+  margin-left: auto;
+  border: 1px solid rgba(155, 109, 255, 0.3);
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.yt-report-ad-btn:hover,
+.yt-report-ad-btn.active {
+  border-color: var(--accent-purple, #9b6dff);
+  background: rgba(155, 109, 255, 0.14);
+  color: var(--text-primary);
+}
+
 .yt-track-meta {
   overflow: hidden;
 }
@@ -1527,6 +1546,7 @@ body {
 /* Sync status */
 .sync-status {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: center;
   gap: 8px;

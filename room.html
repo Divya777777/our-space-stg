@@ -10,7 +10,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=Inter:wght@300;400;500;600&display=swap"
         rel="stylesheet" />
-    <link rel="stylesheet" href="style.css?v=11" />
+    <link rel="stylesheet" href="style.css?v=12" />
     <style>
         /* ── Auth Modal: inline to bypass caching ─────────── */
         #authModal {
@@ -275,7 +275,7 @@
                     <button class="yt-collapse-btn" id="ytCollapseBtn" title="Minimize YouTube">✕</button>
                     <div id="ytPlayer"></div>
                     <!-- Ad sync overlay — shown when any member is watching an ad -->
-                    <div id="ytAdOverlay" class="yt-ad-overlay" style="display:none;">
+                    <div id="ytAdOverlay" class="yt-ad-overlay" style="display:none;" role="status" aria-live="polite">
                         <div class="ad-overlay-content">
                             <div class="ad-spinner"></div>
                             <div class="ad-overlay-text">Ad playing for a member…</div>
@@ -327,6 +327,8 @@
                 <div class="sync-status">
                     <span class="sync-dot"></span>
                     <span id="ytSyncText">Listening together 🌙</span>
+                    <button type="button" id="ytReportAdBtn" class="yt-report-ad-btn" aria-pressed="false"
+                        title="Tell the room when YouTube does not automatically expose an ad">Ad not detected?</button>
                 </div>
 
                 <!-- Add to playlist -->
@@ -512,7 +514,7 @@
 
     <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
     <script src="api.js?v=2"></script>
-    <script src="room.js?v=11"></script>
+    <script src="room.js?v=12"></script>
 </body>
 
 </html>

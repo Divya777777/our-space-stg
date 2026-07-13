@@ -754,7 +754,7 @@ function attemptReconnect() {
 
     const delay = Math.min(1500 * Math.pow(2, reconnectAttempts - 1) + Math.random() * 1000, 15000);
     console.warn(`[PEER] Attempting reconnect ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} in ${Math.round(delay)}ms...`);
-    
+
     reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
         if (!peer || peer.destroyed) return;
@@ -1816,6 +1816,7 @@ function handlePeerDisconnect(id, closingConn) {
         }
         removeVideoPanel(id);
         delete peersMap[id];
+        if (ytRemoteAdWaiters.delete(id)) updateAdBarrierUi();
         renderChatRecipientDropdown();
 
         // Update members panel when someone leaves
@@ -2521,6 +2522,21 @@ let ytAdPlaying = false;       // True when THIS user's player is showing an ad
 let ytAdOverlayShown = false;  // True when the overlay is shown (local OR remote ad)
 let ytAdCheckInterval = null;  // Polling interval for ad detection
 let ytWasPlayingBeforeAd = false; // Tracks if video was playing before ad interrupted
+let ytManualAdPlaying = false; // Manual fallback because YouTube exposes no public ad event
+let ytAdLastContentTime = null;
+let ytAdLastProgressAt = 0;
+let ytAdCandidateSince = 0;
+let ytAdClearSince = 0;
+let ytAdLastStatusSentAt = 0;
+let ytBarrierPauseInProgress = false;
+const ytRemoteAdWaiters = new Map(); // peerId -> { name, lastSeen }
+
+const YT_AD_CHECK_MS = 500;
+const YT_AD_STALL_MS = 3000;
+const YT_AD_START_CONFIRM_MS = 1000;
+const YT_AD_END_CONFIRM_MS = 1500;
+const YT_AD_STATUS_MS = 2000;
+const YT_AD_WAITER_TIMEOUT_MS = 15000;
 
 // Load YouTube IFrame script dynamically
 const ytScript = document.createElement('script');
@@ -2581,7 +2597,6 @@ function onYtStateChange(event) {
     } else {
         clearInterval(ytTimer);
         stopSyncHeartbeat();
-        stopAdDetection();
         // Update progress bar one final time when stopped/paused
         // This ensures the timeline shows the correct position even when not playing
         if (ytPlayer && ytReady) {
@@ -2629,10 +2644,18 @@ async function loadYouTubeVideo(videoId, startSeconds = 0, autoplay = true) {
     }
     ytVideoId = videoId;
     ytDuration = 0; // Reset video duration
-    
+
     // Reset ad state when loading a new video
     ytAdPlaying = false;
     ytAdOverlayShown = false;
+    ytManualAdPlaying = false;
+    ytRemoteAdWaiters.clear();
+    ytAdLastContentTime = null;
+    ytAdLastProgressAt = performance.now();
+    ytAdCandidateSince = 0;
+    ytAdClearSince = 0;
+    ytWasPlayingBeforeAd = false;
+    updateAdReportButton();
     stopAdDetection();
     hideAdOverlay();
 
@@ -2653,6 +2676,7 @@ async function loadYouTubeVideo(videoId, startSeconds = 0, autoplay = true) {
     } else {
         ytPlayer.cueVideoById({ videoId, startSeconds });
     }
+    startAdDetection();
 }
 
 // Load button
@@ -2670,6 +2694,15 @@ ytPlayPauseBtn.addEventListener('click', () => {
     if (!ytPlayer || !ytReady) return;
     if (ytPlaying) ytPlayer.pauseVideo(); else ytPlayer.playVideo();
 });
+
+const ytReportAdBtn = document.getElementById('ytReportAdBtn');
+if (ytReportAdBtn) {
+    ytReportAdBtn.addEventListener('click', () => {
+        ytManualAdPlaying = !ytManualAdPlaying;
+        setLocalAdState(ytManualAdPlaying, 'manual');
+        updateAdReportButton();
+    });
+}
 
 // Volume
 ytVolumeSlider.addEventListener('input', () => {
@@ -2710,14 +2743,14 @@ function startYtTimer() {
 
         const cur = ytPlayer.getCurrentTime() || 0;
         const dur = ytPlayer.getDuration() || 0;
-        
+
         // Prevent ad durations from overwriting the main video duration
         if (dur > 0 && !ytAdPlaying) {
             if (ytDuration === 0 || dur >= ytDuration) {
                 ytDuration = dur;
             }
         }
-        
+
         const pct = dur > 0 ? (cur / dur) * 100 : 0;
 
         // Update progress bar
@@ -2756,65 +2789,163 @@ function stopSyncHeartbeat() {
 }
 
 // ─── AD DETECTION & SYNC ──────────────────────────────
-// YouTube IFrame API doesn't expose a clean onAdStart event.
-// We detect ads by polling: during an ad, getAdState() returns 1,
-// or the playing video_id differs from the one we loaded.
+// YouTube's public IFrame API exposes no ad start/end event. Keep this monitor
+// alive for the whole loaded video and combine several signals. The time-stall
+// signal uses only public player methods; the other signals are optional hints
+// that are used only when a particular YouTube player build exposes them.
 
 function startAdDetection() {
-    stopAdDetection();
+    if (ytAdCheckInterval) return;
+    ytAdLastProgressAt = performance.now();
+
     const checkAd = () => {
         if (!ytPlayer || !ytReady || !ytVideoId) return;
 
-        let adDetected = false;
+        const now = performance.now();
+        const wallNow = Date.now();
+        const state = ytPlayer.getPlayerState();
+        const currentTime = ytPlayer.getCurrentTime() || 0;
+        const currentDuration = ytPlayer.getDuration() || 0;
+        let strongAdSignal = false;
+        let heuristicAdSignal = false;
 
-        // Method 1: getAdState() — returns 1 (playing), 2 (buffering), 3 (paused) when an ad is active
+        if (ytAdLastContentTime === null ||
+            currentTime > ytAdLastContentTime + 0.15 ||
+            currentTime < ytAdLastContentTime - 0.5) {
+            ytAdLastProgressAt = now;
+        }
+        ytAdLastContentTime = currentTime;
+
+        // Optional hint present in some player builds (not part of the public API).
         if (typeof ytPlayer.getAdState === 'function') {
-            const adState = ytPlayer.getAdState();
-            adDetected = (adState === 1 || adState === 2 || adState === 3);
-        }
-
-        // Method 2: Compare current video_id with the loaded one
-        if (!adDetected && typeof ytPlayer.getVideoData === 'function') {
-            const data = ytPlayer.getVideoData();
-            const currentId = data?.video_id || '';
-            if (currentId && currentId !== ytVideoId) {
-                const state = ytPlayer.getPlayerState();
-                if (state === YT.PlayerState.PLAYING || state === YT.PlayerState.BUFFERING) {
-                    adDetected = true;
-                }
+            try {
+                const adState = ytPlayer.getAdState();
+                strongAdSignal = (adState === 1 || adState === 2 || adState === 3);
+            } catch (error) {
+                console.debug('[YT-AD] Optional getAdState hint unavailable', error);
             }
         }
 
-        // Method 3: Check if the video duration suddenly changed to a very short value
-        if (!adDetected && typeof ytPlayer.getDuration === 'function' && ytDuration > 0) {
-            const currentDuration = ytPlayer.getDuration();
+        // Optional metadata hints. These fail safely when YouTube continues to
+        // report the content video's metadata while an ad is playing.
+        if (!strongAdSignal && typeof ytPlayer.getVideoData === 'function') {
+            try {
+                const data = ytPlayer.getVideoData();
+                const currentId = data?.video_id || '';
+                if (currentId && currentId !== ytVideoId) {
+                    if (state === YT.PlayerState.PLAYING || state === YT.PlayerState.BUFFERING) {
+                        strongAdSignal = true;
+                    }
+                }
+            } catch (error) {
+                console.debug('[YT-AD] Optional video metadata hint unavailable', error);
+            }
+        }
+
+        if (!strongAdSignal && ytDuration > 0) {
             if (currentDuration > 0 && currentDuration < ytDuration * 0.3 && ytDuration > 60) {
-                const state = ytPlayer.getPlayerState();
                 if (state === YT.PlayerState.PLAYING || state === YT.PlayerState.BUFFERING) {
-                    adDetected = true;
+                    strongAdSignal = true;
                 }
             }
         }
 
-        if (adDetected && !ytAdPlaying) {
-            ytAdPlaying = true;
-            console.log('[YT-AD] 📺 Ad detected — broadcasting to peers');
-            showAdOverlay('Ad playing — waiting for it to finish…');
-            sendSync({ type: 'yt_ad_playing', sentBy: myName });
-            // Suppress sync heartbeats while ad is playing
-            stopSyncHeartbeat();
-        } else if (!adDetected && ytAdPlaying) {
-            ytAdPlaying = false;
-            console.log('[YT-AD] ✅ Ad finished — broadcasting to peers');
-            hideAdOverlay();
-            sendSync({ type: 'yt_ad_ended', sentBy: myName });
-            // Resume heartbeat
-            if (ytPlaying) startSyncHeartbeat();
+        // During an iframe ad, the content clock commonly stops even though the
+        // player reports PLAYING. Debounce this to avoid short network stalls.
+        const notNearEnd = !currentDuration || currentTime < currentDuration - 2;
+        heuristicAdSignal = state === YT.PlayerState.PLAYING &&
+            notNearEnd && now - ytAdLastProgressAt >= YT_AD_STALL_MS;
+
+        const adSignal = strongAdSignal || heuristicAdSignal;
+        if (adSignal) {
+            ytAdClearSince = 0;
+            if (!ytAdCandidateSince) ytAdCandidateSince = now;
+            const confirmed = strongAdSignal || now - ytAdCandidateSince >= YT_AD_START_CONFIRM_MS;
+            if (confirmed && !ytAdPlaying) setLocalAdState(true, 'automatic');
+        } else {
+            ytAdCandidateSince = 0;
+            if (ytAdPlaying && !ytManualAdPlaying) {
+                if (!ytAdClearSince) ytAdClearSince = now;
+                const contentAdvancing = now - ytAdLastProgressAt < 1200;
+                if (contentAdvancing && now - ytAdClearSince >= YT_AD_END_CONFIRM_MS) {
+                    setLocalAdState(false, 'automatic');
+                }
+            }
         }
+
+        // Repeat active state for late joiners and recover from a dropped event.
+        if (ytAdPlaying && wallNow - ytAdLastStatusSentAt >= YT_AD_STATUS_MS) {
+            ytAdLastStatusSentAt = wallNow;
+            sendAdStatus(true);
+        }
+
+        // A disconnected peer must not leave the whole room blocked forever.
+        let removedStaleWaiter = false;
+        for (const [peerId, waiter] of ytRemoteAdWaiters) {
+            if (wallNow - waiter.lastSeen > YT_AD_WAITER_TIMEOUT_MS) {
+                ytRemoteAdWaiters.delete(peerId);
+                removedStaleWaiter = true;
+            }
+        }
+        if (removedStaleWaiter) updateAdBarrierUi();
     };
 
-    checkAd(); // Run once immediately
-    ytAdCheckInterval = setInterval(checkAd, 800);
+    checkAd();
+    ytAdCheckInterval = setInterval(checkAd, YT_AD_CHECK_MS);
+}
+
+function sendAdStatus(active) {
+    const currentTime = ytPlayer && ytReady ? ytPlayer.getCurrentTime() || 0 : 0;
+    sendSync({
+        type: 'yt_ad_status',
+        active,
+        videoId: ytVideoId,
+        currentTime,
+        playing: ytPlaying,
+        sentBy: myName,
+    });
+}
+
+function setLocalAdState(active, source = 'automatic') {
+    if (ytAdPlaying === active) return;
+    ytAdPlaying = active;
+
+    if (active) {
+        console.log(`[YT-AD] 📺 Ad detected (${source}) — broadcasting to peers`);
+        stopSyncHeartbeat();
+        ytAdLastStatusSentAt = Date.now();
+        sendAdStatus(true);
+    } else {
+        if (ytRemoteAdWaiters.size > 0 && ytPlaying) {
+            ytWasPlayingBeforeAd = true;
+        }
+        console.log(`[YT-AD] ✅ Ad finished (${source}) — broadcasting to peers`);
+        ytAdLastStatusSentAt = Date.now();
+        sendAdStatus(false);
+        if (ytPlaying) startSyncHeartbeat();
+    }
+
+    updateAdReportButton();
+    updateAdBarrierUi();
+}
+
+function setRemoteAdState(senderId, name, active, lastPosition = null) {
+    if (!senderId) return;
+    const wasWaiting = ytRemoteAdWaiters.size > 0;
+
+    if (active) {
+        if (!wasWaiting && !ytAdPlaying) {
+            ytWasPlayingBeforeAd = ytPlaying;
+        }
+        ytRemoteAdWaiters.set(senderId, {
+            name: name || peersMap[senderId]?.name || 'a room member',
+            lastSeen: Date.now(),
+        });
+    } else {
+        ytRemoteAdWaiters.delete(senderId);
+    }
+
+    updateAdBarrierUi(!active ? lastPosition : null);
 }
 
 function stopAdDetection() {
@@ -2826,27 +2957,77 @@ function showAdOverlay(message) {
     if (!overlay) return;
     const textEl = overlay.querySelector('.ad-overlay-text');
     if (textEl && message) textEl.textContent = message;
-    
-    // Only show the overlay on our screen if WE are not the one playing the ad
-    if (!ytAdPlaying) {
-        overlay.style.display = 'flex';
-    } else {
-        overlay.style.display = 'none';
-    }
+
+    overlay.style.display = 'flex';
+    const iframe = document.querySelector('#ytPlayerWrapper iframe');
+    if (iframe) iframe.style.visibility = 'hidden';
     ytAdOverlayShown = true;
-    
-    // Pause our player while someone has an ad (keeps sync)
-    if (ytPlayer && ytReady && !ytAdPlaying) {
-        // Only pause if WE are not the one with the ad (our ad plays natively)
-        try { ytPlayer.pauseVideo(); } catch (e) { }
-    }
 }
 
 function hideAdOverlay() {
     const overlay = document.getElementById('ytAdOverlay');
     if (!overlay) return;
     overlay.style.display = 'none';
+    const iframe = document.querySelector('#ytPlayerWrapper iframe');
+    if (iframe) iframe.style.visibility = 'visible';
+}
+
+function updateAdBarrierUi(resumePosition = null) {
+    const remoteWaiters = [...ytRemoteAdWaiters.values()];
+    const hasRemoteWaiter = remoteWaiters.length > 0;
+    const barrierActive = ytAdPlaying || hasRemoteWaiter;
+    ytAdOverlayShown = barrierActive;
+
+    // The member who has the local ad must continue seeing YouTube's ad. Other
+    // members see our waiting panel with the iframe hidden, not covered.
+    if (hasRemoteWaiter && !ytAdPlaying) {
+        const names = remoteWaiters.map(waiter => waiter.name);
+        const label = names.length === 1 ? names[0] : `${names.length} room members`;
+        showAdOverlay(`Ad playing for ${label}…`);
+        ytSyncText.textContent = `⏸ Waiting for ${label}'s ad to finish`;
+
+        if (ytPlayer && ytReady &&
+            ytPlayer.getPlayerState() === YT.PlayerState.PLAYING &&
+            !ytBarrierPauseInProgress) {
+            ytBarrierPauseInProgress = true;
+            isSyncing = true;
+            try { ytPlayer.pauseVideo(); } catch (e) { }
+            setTimeout(() => {
+                ytBarrierPauseInProgress = false;
+                isSyncing = false;
+            }, 750);
+        }
+        return;
+    }
+
+    hideAdOverlay();
+
+    if (ytAdPlaying) {
+        ytSyncText.textContent = 'Ad playing on your device…';
+        return;
+    }
+
     ytAdOverlayShown = false;
+    ytSyncText.textContent = 'Listening together 🌙';
+
+    if (ytWasPlayingBeforeAd && ytPlayer && ytReady) {
+        ytWasPlayingBeforeAd = false;
+        isSyncing = true;
+        if (Number.isFinite(resumePosition) &&
+            Math.abs((ytPlayer.getCurrentTime() || 0) - resumePosition) > 2) {
+            ytPlayer.seekTo(resumePosition, true);
+        }
+        try { ytPlayer.playVideo(); } catch (e) { }
+        setTimeout(() => { isSyncing = false; }, 1000);
+    }
+}
+
+function updateAdReportButton() {
+    const button = document.getElementById('ytReportAdBtn');
+    if (!button) return;
+    button.classList.toggle('active', ytManualAdPlaying);
+    button.textContent = ytManualAdPlaying ? 'Ad finished' : 'Ad not detected?';
+    button.setAttribute('aria-pressed', ytManualAdPlaying ? 'true' : 'false');
 }
 
 // ─────────────────────────────────────────────────────
@@ -2987,22 +3168,17 @@ async function handleSyncMessage(msg, senderId) {
     }
 
     // ── YouTube ad sync ───────────────────────────────
-    if (msg.type === 'yt_ad_playing') {
+    if (msg.type === 'yt_ad_playing' || (msg.type === 'yt_ad_status' && msg.active)) {
+        if (msg.videoId && ytVideoId && msg.videoId !== ytVideoId) return;
         console.log(`[YT-AD] 📺 ${msg.sentBy} is watching an ad — pausing & showing overlay`);
-        ytWasPlayingBeforeAd = ytPlaying; // Save the state before the ad pause
-        showAdOverlay(`Ad playing for ${msg.sentBy}…`);
-        ytSyncText.textContent = `⏸ Waiting for ${msg.sentBy}'s ad to finish`;
+        setRemoteAdState(senderId, msg.sentBy, true);
         return;
     }
 
-    if (msg.type === 'yt_ad_ended') {
+    if (msg.type === 'yt_ad_ended' || (msg.type === 'yt_ad_status' && !msg.active)) {
+        if (msg.videoId && ytVideoId && msg.videoId !== ytVideoId) return;
         console.log(`[YT-AD] ✅ ${msg.sentBy}'s ad finished — resuming playback`);
-        hideAdOverlay();
-        ytSyncText.textContent = `Listening together 🌙`;
-        // Resume playback if it was active before the ad interrupted
-        if (ytPlayer && ytReady && ytWasPlayingBeforeAd) {
-            try { ytPlayer.playVideo(); } catch (e) { }
-        }
+        setRemoteAdState(senderId, msg.sentBy, false, msg.currentTime);
         return;
     }
 
