@@ -6,7 +6,7 @@ class OurSpaceAPI {
 
     // Production: GitHub Pages deployment
     if (hostname === 'divya777777.github.io') {
-      this.baseURL = 'https://our-space-production-30ee.up.railway.app/api';
+      this.baseURL = 'https://our-space-stg.onrender.com/api';
     }
     // Development: localhost or IP address
     else {
