@@ -1129,6 +1129,17 @@ body {
   border-bottom: 1px solid var(--glass-border);
 }
 
+.music-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.music-close-btn,
+.music-toggle-btn {
+  display: none;
+}
+
 .music-title {
   display: flex;
   align-items: center;
@@ -3648,11 +3659,86 @@ body {
   }
 
   .music-section {
+    position: fixed;
+    inset: auto 0 0 !important;
+    z-index: 3900;
     width: 100%;
-    height: auto;
+    height: min(82svh, 720px, var(--mobile-viewport-height, 100svh));
+    max-height: var(--mobile-viewport-height, 100svh);
     min-height: 0;
-    overflow: visible;
-    border-radius: 18px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-radius: 20px 20px 0 0;
+    padding-bottom: env(safe-area-inset-bottom, 0);
+    transform: translateY(105%);
+    opacity: 1;
+    pointer-events: none;
+    transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    background: rgba(15, 10, 40, 0.97);
+  }
+
+  .music-section.mobile-open {
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+
+  .music-header {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: rgba(15, 10, 40, 0.97);
+    backdrop-filter: blur(18px);
+  }
+
+  .music-close-btn {
+    width: 36px;
+    height: 36px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+  }
+
+  .music-toggle-btn {
+    position: fixed;
+    right: 78px;
+    bottom: calc(14px + env(safe-area-inset-bottom, 0));
+    z-index: 3000;
+    width: 54px;
+    height: 54px;
+    border: 1px solid rgba(255, 0, 51, 0.46);
+    border-radius: 50%;
+    background: rgba(20, 15, 45, 0.94);
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 18px rgba(255, 0, 51, 0.24);
+    transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .music-toggle-btn.active {
+    z-index: 4100;
+    background: rgba(255, 0, 51, 0.22);
+    box-shadow: 0 6px 24px rgba(255, 0, 51, 0.38);
+    transform: scale(0.94);
+  }
+
+  .music-toggle-btn:active,
+  .chat-toggle-btn:active {
+    transform: scale(0.9);
+  }
+
+  .music-toggle-btn:focus-visible,
+  .music-close-btn:focus-visible {
+    outline: 2px solid var(--accent-moon);
+    outline-offset: 3px;
   }
 
   .music-header,
@@ -3699,10 +3785,10 @@ body {
   }
 
   .chat-panel {
-    inset: auto 0 0 !important;
+    inset: auto 0 var(--mobile-keyboard-offset, 0) !important;
     width: 100% !important;
-    height: min(76svh, 640px) !important;
-    max-height: calc(100svh - env(safe-area-inset-top, 0)) !important;
+    height: min(76svh, 640px, var(--mobile-viewport-height, 100svh)) !important;
+    max-height: var(--mobile-viewport-height, 100svh) !important;
     border-radius: 20px 20px 0 0 !important;
     padding-bottom: env(safe-area-inset-bottom, 0);
     transform: translateY(105%) !important;
@@ -3722,7 +3808,12 @@ body {
   }
 
   .chat-input-area {
+    flex: 0 0 auto;
     padding-bottom: calc(12px + env(safe-area-inset-bottom, 0));
+  }
+
+  .mobile-drawer-open .room-main {
+    overflow: hidden;
   }
 
   .members-panel {

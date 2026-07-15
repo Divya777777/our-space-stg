@@ -10,7 +10,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=Inter:wght@300;400;500;600&display=swap"
         rel="stylesheet" />
-    <link rel="stylesheet" href="style.css?v=13" />
+    <link rel="stylesheet" href="style.css?v=14" />
     <style>
         /* ── Auth Modal: inline to bypass caching ─────────── */
         #authModal {
@@ -239,12 +239,15 @@
                     <span>🎵</span>
                     <h2>Music Together</h2>
                 </div>
-                <a href="https://music.youtube.com" target="_blank" class="yt-search-link" title="Open YouTube Music">
-                    <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
-                        <path d="M8 5v14l11-7z" />
-                    </svg>
-                    Find songs
-                </a>
+                <div class="music-header-actions">
+                    <a href="https://music.youtube.com" target="_blank" class="yt-search-link" title="Open YouTube Music">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
+                            <path d="M8 5v14l11-7z" />
+                        </svg>
+                        Find songs
+                    </a>
+                    <button class="music-close-btn" id="musicCloseBtn" title="Close music" aria-label="Close music">✕</button>
+                </div>
             </div>
 
             <!-- URL input -->
@@ -370,6 +373,14 @@
                 <div class="playlist-items" id="playlistItems"></div>
             </div>
         </section>
+
+        <!-- Mobile drawer controls (hidden on desktop) -->
+        <button class="music-toggle-btn" id="musicToggleBtn" title="Open YouTube Music" aria-label="Open YouTube Music">
+            <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
+                <path fill="#ff0033" d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.6 12 3.6 12 3.6s-7.5 0-9.4.5A3 3 0 0 0 .5 6.2 31 31 0 0 0 0 12a31 31 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.5 9.4.5 9.4.5s7.5 0 9.4-.5a3 3 0 0 0 2.1-2.1A31 31 0 0 0 24 12a31 31 0 0 0-.5-5.8Z"/>
+                <path fill="#fff" d="m9.6 15.6 6.3-3.6-6.3-3.6v7.2Z"/>
+            </svg>
+        </button>
 
         <!-- Chat Panel (Floating) -->
         <button class="chat-toggle-btn" id="chatToggleBtn" title="Open Room Chat">💬
@@ -519,7 +530,7 @@
 
     <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
     <script src="api.js?v=4"></script>
-    <script src="room.js?v=14"></script>
+    <script src="room.js?v=15"></script>
 </body>
 
 </html>

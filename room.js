@@ -4009,10 +4009,42 @@ const chatCloseBtn = document.getElementById('chatCloseBtn');
 const chatInput = document.getElementById('chatInput');
 const chatSendBtn = document.getElementById('chatSendBtn');
 const chatFileInput = document.getElementById('chatFileInput');
+const musicSection = document.getElementById('musicSection');
+const musicToggleBtn = document.getElementById('musicToggleBtn');
+const musicCloseBtn = document.getElementById('musicCloseBtn');
+
+function isMobileRoomLayout() {
+    return window.matchMedia('(max-width: 600px), (pointer: coarse) and (max-width: 900px)').matches;
+}
+
+function syncMobileDrawerState() {
+    const drawerOpen = chatPanel?.classList.contains('show') || musicSection?.classList.contains('mobile-open');
+    document.body.classList.toggle('mobile-drawer-open', isMobileRoomLayout() && drawerOpen);
+}
+
+function closeMobileMusic() {
+    musicSection?.classList.remove('mobile-open');
+    musicToggleBtn?.classList.remove('active');
+    syncMobileDrawerState();
+}
+
+if (musicToggleBtn && musicSection) {
+    musicToggleBtn.addEventListener('click', () => {
+        const opening = !musicSection.classList.contains('mobile-open');
+        chatPanel?.classList.remove('show');
+        musicSection.classList.toggle('mobile-open', opening);
+        musicToggleBtn.classList.toggle('active', opening);
+        syncMobileDrawerState();
+    });
+}
+
+musicCloseBtn?.addEventListener('click', closeMobileMusic);
 
 if (chatToggleBtn && chatPanel) {
     chatToggleBtn.addEventListener('click', () => {
+        closeMobileMusic();
         chatPanel.classList.toggle('show');
+        syncMobileDrawerState();
         if (chatPanel.classList.contains('show')) {
             unreadChatCount = 0;
             const badge = document.getElementById('chatBadge');
@@ -4024,8 +4056,32 @@ if (chatToggleBtn && chatPanel) {
     });
     chatCloseBtn.addEventListener('click', () => {
         chatPanel.classList.remove('show');
+        syncMobileDrawerState();
     });
 }
+
+function updateMobileVisualViewport() {
+    if (!isMobileRoomLayout()) return;
+    const viewport = window.visualViewport;
+    const height = viewport?.height || window.innerHeight;
+    const keyboardOffset = viewport
+        ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)
+        : 0;
+    document.documentElement.style.setProperty('--mobile-viewport-height', `${height}px`);
+    document.documentElement.style.setProperty('--mobile-keyboard-offset', `${keyboardOffset}px`);
+}
+
+updateMobileVisualViewport();
+window.addEventListener('resize', updateMobileVisualViewport);
+window.visualViewport?.addEventListener('resize', updateMobileVisualViewport);
+window.visualViewport?.addEventListener('scroll', updateMobileVisualViewport);
+chatInput?.addEventListener('focus', () => {
+    updateMobileVisualViewport();
+    setTimeout(() => {
+        updateMobileVisualViewport();
+        chatInput.scrollIntoView({ block: 'nearest' });
+    }, 250);
+});
 
 if (chatSendBtn && chatInput) {
     chatSendBtn.addEventListener('click', () => {
