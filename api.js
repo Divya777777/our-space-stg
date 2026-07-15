@@ -196,6 +196,14 @@ class OurSpaceAPI {
   }
 
   // ==================
+  // WebRTC connectivity
+  // ==================
+
+  async getIceServers() {
+    return await this.request('/webrtc/ice-servers');
+  }
+
+  // ==================
   // Messages
   // ==================
 

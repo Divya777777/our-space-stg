@@ -802,16 +802,32 @@ async function setupPeer() {
             window.location.hostname === '127.0.0.1' ||
             window.location.port !== '');
 
-    // Better ICE server configuration for more reliable connections
+    // Prefer direct P2P connectivity. TURN relay candidates are available only
+    // as an ICE fallback when host/STUN candidates cannot connect.
+    let iceServers = [{ urls: 'stun:stun.cloudflare.com:3478' }];
+    try {
+        const turnConfig = await api.getIceServers();
+        if (turnConfig?.success && Array.isArray(turnConfig.iceServers)) {
+            const cloudflareServers = turnConfig.iceServers.map(server => ({
+                ...server,
+                // Cloudflare documents port 53 as blocked by major browsers;
+                // omit it to avoid slow candidate timeouts.
+                urls: (Array.isArray(server.urls) ? server.urls : [server.urls])
+                    .filter(url => url && !url.includes(':53'))
+            })).filter(server => server.urls.length > 0);
+
+            iceServers = cloudflareServers;
+            console.log('[PEER] TURN fallback is available; direct ICE routes remain preferred.');
+        }
+    } catch (error) {
+        // Calls may still succeed directly. This preserves service if the TURN
+        // credential endpoint or Cloudflare is temporarily unavailable.
+        console.warn('[PEER] TURN fallback unavailable; trying direct/STUN connectivity only.', error.message);
+    }
+
     const peerConfig = {
         config: {
-            iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' },
-                { urls: 'stun:stun3.l.google.com:19302' },
-                { urls: 'stun:stun4.l.google.com:19302' }
-            ],
+            iceServers,
             iceTransportPolicy: 'all'
         },
         debug: 0 // Set to 3 for verbose debugging if needed

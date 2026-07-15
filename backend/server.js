@@ -20,6 +20,7 @@ const roomRoutes = require('./routes/rooms');
 const messageRoutes = require('./routes/messages');
 const playlistRoutes = require('./routes/playlists');
 const userRoutes = require('./routes/users');
+const webrtcRoutes = require('./routes/webrtc');
 
 // Import utilities
 const { logAuditEvent, Severity } = require('./utils/auditLogger');
@@ -96,6 +97,7 @@ app.use('/api/rooms', roomRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/playlists', playlistRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/webrtc', webrtcRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -141,6 +143,7 @@ async function startServer() {
   console.log(`JWT_SECRET set: ${!!process.env.JWT_SECRET}`);
   console.log(`GOOGLE_CLIENT_ID set: ${!!process.env.GOOGLE_CLIENT_ID}`);
   console.log(`CORS_ORIGIN: ${process.env.CORS_ORIGIN || '(not set, using defaults)'}`);
+  console.log(`Cloudflare TURN configured: ${!!(process.env.CLOUDFLARE_TURN_KEY_ID && process.env.CLOUDFLARE_TURN_API_TOKEN)}`);
   console.log('================================================');
   console.log('');
 
