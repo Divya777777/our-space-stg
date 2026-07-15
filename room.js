@@ -1388,7 +1388,7 @@ function acceptPeer(conn, guestName, requestId) {
     setTimeout(() => sendSyncPing(conn), 1000);
 
     if (isInCall && localStream && peersMap[newPeerId] && !peersMap[newPeerId].callConn) {
-        const call = peer.call(newPeerId, localStream);
+        const call = createMediaCall(newPeerId, localStream);
         if (call) handleOutboundCall(call, newPeerId);
     }
 }
@@ -1514,7 +1514,7 @@ function connectToHost(retryCount = 0) {
 
                 if (isInCall && localStream && peersMap[hostId] && !peersMap[hostId].callConn) {
                     console.log('[GUEST] Calling host...');
-                    const call = peer.call(hostId, localStream);
+                    const call = createMediaCall(hostId, localStream);
                     if (call) handleOutboundCall(call, hostId);
                 }
 
@@ -1688,7 +1688,7 @@ async function connectToOtherMembers() {
 
                         if (isInCall && localStream && peersMap[hostId] && !peersMap[hostId].callConn) {
                             console.log('[GUEST] Calling host silently...');
-                            const call = peer.call(hostId, localStream);
+                            const call = createMediaCall(hostId, localStream);
                             if (call) handleOutboundCall(call, hostId);
                         }
                         return;
@@ -1752,7 +1752,7 @@ function setupGuestToGuest(conn, peerName) {
         conn.send({ type: 'peer_intro', name: myName });
         if (isInCall && localStream && peersMap[conn.peer] && !peersMap[conn.peer].callConn) {
             console.log(`[P2P] Calling peer ${peerName} (${conn.peer})...`);
-            const call = peer.call(conn.peer, localStream);
+            const call = createMediaCall(conn.peer, localStream);
             if (call) handleOutboundCall(call, conn.peer);
         }
     };
@@ -1919,7 +1919,8 @@ async function answerIncomingCall(call) {
     if (!peersMap[id]) return;
 
     if (localStream) {
-        call.answer(localStream);
+        call.answer(localStream, { sdpTransform: optimiseOpusSdp });
+        configureCallAudio(call);
         peersMap[id].callConn = call;
         call.on('stream', stream => addVideoPanel(id, stream));
         call.on('close', () => removeVideoPanel(id));
@@ -1934,7 +1935,8 @@ async function answerIncomingCall(call) {
             isInCall = true;
             startCallBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"/></svg> End Call`;
             startCallBtn.classList.add('end-call');
-            call.answer(stream);
+            call.answer(stream, { sdpTransform: optimiseOpusSdp });
+            configureCallAudio(call);
             peersMap[id].callConn = call;
             call.on('stream', s => addVideoPanel(id, s));
             call.on('close', () => removeVideoPanel(id));
@@ -1959,7 +1961,7 @@ async function startCall() {
         // Directly call all connected peers — no ringtone needed when everyone is in the room
         setTimeout(() => {
             Object.keys(peersMap).forEach(id => {
-                const call = peer.call(id, localStream);
+                const call = createMediaCall(id, localStream);
                 if (call) handleOutboundCall(call, id);
             });
         }, 400);
@@ -1969,9 +1971,86 @@ async function startCall() {
 
 function handleOutboundCall(call, id) {
     peersMap[id].callConn = call;
+    configureCallAudio(call);
     call.on('stream', stream => { addVideoPanel(id, stream); });
     call.on('close', () => { removeVideoPanel(id); });
     call.on('error', () => { removeVideoPanel(id); });
+}
+
+function optimiseOpusSdp(sdp) {
+    if (!sdp || typeof sdp !== 'string') return sdp;
+
+    const opusMatch = sdp.match(/a=rtpmap:(\d+) opus\/48000\/2/i);
+    if (!opusMatch) return sdp;
+
+    const payloadType = opusMatch[1];
+    const desiredParameters = {
+        minptime: '10',
+        useinbandfec: '1',
+        usedtx: '1',
+        stereo: '0',
+        'sprop-stereo': '0',
+        maxaveragebitrate: '64000',
+        cbr: '0'
+    };
+    const fmtpPattern = new RegExp(`a=fmtp:${payloadType} ([^\\r\\n]*)`, 'i');
+    const fmtpMatch = sdp.match(fmtpPattern);
+
+    if (fmtpMatch) {
+        const parameters = new Map();
+        fmtpMatch[1].split(';').forEach(part => {
+            const [key, value] = part.trim().split('=');
+            if (key) parameters.set(key.toLowerCase(), value || '');
+        });
+        Object.entries(desiredParameters).forEach(([key, value]) => parameters.set(key, value));
+        const updated = Array.from(parameters, ([key, value]) => `${key}=${value}`).join(';');
+        return sdp.replace(fmtpPattern, `a=fmtp:${payloadType} ${updated}`);
+    }
+
+    const rtpmapPattern = new RegExp(`(a=rtpmap:${payloadType} opus/48000/2\\r?\\n)`, 'i');
+    const parameters = Object.entries(desiredParameters)
+        .map(([key, value]) => `${key}=${value}`)
+        .join(';');
+    return sdp.replace(rtpmapPattern, `$1a=fmtp:${payloadType} ${parameters}\r\n`);
+}
+
+function createMediaCall(peerId, stream) {
+    return peer.call(peerId, stream, { sdpTransform: optimiseOpusSdp });
+}
+
+async function tuneAudioSender(peerConnection) {
+    if (!peerConnection || !peerConnection.getSenders) return;
+    const sender = peerConnection.getSenders().find(item => item.track?.kind === 'audio');
+    if (!sender || !sender.getParameters || !sender.setParameters) return;
+
+    const parameters = sender.getParameters();
+    if (!parameters.encodings?.length) parameters.encodings = [{}];
+    parameters.encodings[0].maxBitrate = 64000;
+    parameters.encodings[0].priority = 'high';
+
+    try {
+        await sender.setParameters(parameters);
+    } catch (error) {
+        // Some Safari/Firefox versions reject priority but accept the bitrate.
+        try {
+            const fallback = sender.getParameters();
+            if (!fallback.encodings?.length) fallback.encodings = [{}];
+            fallback.encodings[0].maxBitrate = 64000;
+            await sender.setParameters(fallback);
+        } catch (fallbackError) {
+            console.warn('Could not apply optional audio sender tuning', fallbackError);
+        }
+    }
+}
+
+function configureCallAudio(call) {
+    const peerConnection = call?.peerConnection;
+    if (!peerConnection) return;
+
+    tuneAudioSender(peerConnection);
+    peerConnection.addEventListener('connectionstatechange', () => {
+        if (peerConnection.connectionState === 'connected') tuneAudioSender(peerConnection);
+    });
 }
 
 function handleIncomingCall(call) {
