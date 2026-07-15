@@ -1926,7 +1926,7 @@ async function answerIncomingCall(call) {
     } else {
         try {
             const constraints = getMediaConstraints();
-            const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            const stream = await acquireLocalMedia(constraints);
             localStream = stream;
             myVideo.srcObject = stream;
             myVideo.classList.add('active');
@@ -1947,7 +1947,7 @@ async function answerIncomingCall(call) {
 async function startCall() {
     try {
         const constraints = getMediaConstraints();
-        localStream = await navigator.mediaDevices.getUserMedia(constraints);
+        localStream = await acquireLocalMedia(constraints);
         myVideo.srcObject = localStream;
         myVideo.classList.add('active');
         myPlaceholder.style.display = 'none';
@@ -2116,11 +2116,24 @@ let selectedAudioOutput = localStorage.getItem('ourspace_audio_out') || 'default
 let selectedVideoInput = localStorage.getItem('ourspace_video_in') || 'default';
 
 function getMediaConstraints() {
-    let audioConstraints = {
-        noiseSuppression: true,
-        echoCancellation: true,
-        autoGainControl: true
-    };
+    const supported = navigator.mediaDevices.getSupportedConstraints
+        ? navigator.mediaDevices.getSupportedConstraints()
+        : {};
+    let audioConstraints = {};
+
+    // Ask the browser's native WebRTC audio-processing pipeline for a
+    // speech-first signal. Unsupported constraints are deliberately omitted.
+    if (supported.echoCancellation) audioConstraints.echoCancellation = { ideal: true };
+    if (supported.noiseSuppression) audioConstraints.noiseSuppression = { ideal: true };
+    if (supported.autoGainControl) audioConstraints.autoGainControl = { ideal: true };
+    if (supported.channelCount) audioConstraints.channelCount = { ideal: 1 };
+    if (supported.sampleRate) audioConstraints.sampleRate = { ideal: 48000 };
+    if (supported.sampleSize) audioConstraints.sampleSize = { ideal: 16 };
+    if (supported.latency) audioConstraints.latency = { ideal: 0.01 };
+
+    // Some browsers expose stronger, hardware/ML-backed voice isolation before
+    // it is part of the cross-browser MediaTrackSupportedConstraints type.
+    if (supported.voiceIsolation) audioConstraints.voiceIsolation = { ideal: true };
 
     if (selectedAudioInput && selectedAudioInput !== 'default') {
         audioConstraints.deviceId = selectedAudioInput;
@@ -2132,6 +2145,37 @@ function getMediaConstraints() {
     }
 
     return { video: videoConstraints, audio: audioConstraints };
+}
+
+function optimiseSpeechTrack(track) {
+    if (!track) return;
+
+    // Lets the WebRTC encoder favour intelligible speech over music fidelity.
+    if ('contentHint' in track) track.contentHint = 'speech';
+
+    // getUserMedia constraints are preferences. Re-apply supported processing
+    // to the selected track so browsers have another opportunity to enable it.
+    const supported = navigator.mediaDevices.getSupportedConstraints
+        ? navigator.mediaDevices.getSupportedConstraints()
+        : {};
+    const constraints = {};
+    if (supported.echoCancellation) constraints.echoCancellation = true;
+    if (supported.noiseSuppression) constraints.noiseSuppression = true;
+    if (supported.autoGainControl) constraints.autoGainControl = true;
+    if (supported.channelCount) constraints.channelCount = { ideal: 1 };
+    if (supported.voiceIsolation) constraints.voiceIsolation = true;
+
+    if (Object.keys(constraints).length && track.applyConstraints) {
+        track.applyConstraints(constraints).catch(error => {
+            console.warn('Some microphone enhancements were unavailable', error);
+        });
+    }
+}
+
+async function acquireLocalMedia(constraints = getMediaConstraints()) {
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    stream.getAudioTracks().forEach(optimiseSpeechTrack);
+    return stream;
 }
 
 async function populateDeviceLists() {
@@ -2204,7 +2248,7 @@ async function applyDeviceSettings() {
             // This is critical for macOS and Linux to switch cameras/mics successfully.
             localStream.getTracks().forEach(t => t.stop());
 
-            const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+            const newStream = await acquireLocalMedia(constraints);
 
             // Replace tracks for local video
             myVideo.srcObject = newStream;
