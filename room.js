@@ -2074,7 +2074,7 @@ function addVideoPanel(id, stream) {
         panel.className = 'video-panel';
         panel.id = `panel_${id}`;
         panel.innerHTML = `
-            <video id="video_${id}" autoplay playsinline disablePictureInPicture class="video-element active"></video>
+            <video id="video_${id}" autoplay playsinline class="video-element active"></video>
             <div class="video-label">${peersMap[id].name}</div>
             <button class="expand-btn" data-target="panel_${id}" title="Expand">⛶</button>
         `;
@@ -2087,6 +2087,9 @@ function addVideoPanel(id, stream) {
     const vid = document.getElementById(`video_${id}`);
     if (vid) {
         vid.srcObject = stream;
+        // Chromium can automatically retain an eligible playing video when the
+        // user backgrounds the page after granting Picture-in-Picture once.
+        vid.autoPictureInPicture = true;
 
         // Apply selected speaker if available
         const selectedAudioOutput = localStorage.getItem('ourspace_audio_out');
@@ -4530,8 +4533,15 @@ async function triggerPip() {
         return;
     }
 
-    // Try Document PiP first if supported
-    if ('documentPictureInPicture' in window) {
+    const mobileLayout = window.matchMedia('(max-width: 768px), (pointer: coarse)').matches;
+    const remoteVideo = activeVideos.find(video => video.id !== 'myVideo');
+    const compositeVideo = document.getElementById('pipVideo');
+    const targetVideo = mobileLayout && remoteVideo ? remoteVideo : compositeVideo;
+
+    // Document PiP can show a composed call on desktop. Mobile browsers do not
+    // support it reliably, so use the actual remote video to avoid canvas
+    // capture/background-throttling issues.
+    if (!mobileLayout && 'documentPictureInPicture' in window) {
         try {
             await enterDocumentPip();
             return;
@@ -4541,22 +4551,32 @@ async function triggerPip() {
     }
 
     // Fallback to standard Video PiP
-    if (typeof HTMLVideoElement.prototype.requestPictureInPicture === 'function') {
+    if (targetVideo && typeof targetVideo.requestPictureInPicture === 'function') {
         if (document.pictureInPictureElement) {
             console.log('[PIP] Already in Video Picture-in-Picture.');
             return;
         }
         try {
             console.log('[PIP] Requesting standard Video Picture-in-Picture...');
-            startPipCanvasRender();
-            await pipVideo.play();
-            await pipVideo.requestPictureInPicture();
+            if (targetVideo === compositeVideo) startPipCanvasRender();
+            targetVideo.autoPictureInPicture = true;
+            await targetVideo.play();
+            await targetVideo.requestPictureInPicture();
         } catch (err) {
             if (err.name === 'NotAllowedError') {
                 console.log('[PIP] ℹ️ Auto-PIP requires user gesture or browser permission settings.');
             } else {
                 console.error('[PIP] ❌ Video PiP failed:', err);
             }
+        }
+    } else if (targetVideo && typeof targetVideo.webkitSetPresentationMode === 'function') {
+        // Safari/iOS exposes its native video presentation mode instead of the
+        // standard requestPictureInPicture method on some versions.
+        try {
+            await targetVideo.play();
+            targetVideo.webkitSetPresentationMode('picture-in-picture');
+        } catch (err) {
+            console.warn('[PIP] Safari Picture-in-Picture requires a direct user tap.', err);
         }
     }
 }
@@ -4570,11 +4590,23 @@ setTimeout(() => {
         return;
     }
 
-    const isPipSupported = typeof HTMLVideoElement.prototype.requestPictureInPicture === 'function';
+    const isPipSupported = typeof HTMLVideoElement.prototype.requestPictureInPicture === 'function'
+        || typeof HTMLVideoElement.prototype.webkitSetPresentationMode === 'function';
     console.log('[PIP] Browser support check - isPipSupported:', isPipSupported);
 
     // Warm up the canvas rendering loop immediately on page load
     startPipCanvasRender();
+
+    const pipModeBtn = document.getElementById('pipModeBtn');
+    if (pipModeBtn) {
+        if (!isPipSupported && !('documentPictureInPicture' in window)) {
+            pipModeBtn.style.display = 'none';
+        } else {
+            // This explicit tap is important on mobile: browsers generally
+            // reject the first PiP request after the page is already hidden.
+            pipModeBtn.addEventListener('click', triggerPip);
+        }
+    }
 
     if (isPipSupported) {
         // Declarative auto-PiP support on active tiny video
