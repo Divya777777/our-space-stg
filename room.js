@@ -1380,7 +1380,12 @@ function acceptPeer(conn, guestName, requestId) {
             roomId: currentRoomId, // Send database room ID!
             peers: activePeers,
             hostPlaylists: roomPlaylists,
-            ytState: { videoId: ytVideoId, time: ytPlayer?.getCurrentTime?.() || 0, playing: ytPlaying }
+            ytState: {
+                videoId: ytVideoId,
+                time: ytPlayer?.getCurrentTime?.() || 0,
+                playing: ytPlaying,
+                stateVersion: ytStateVersion,
+            }
         });
         console.log('[HOST] Welcome message sent to:', guestName);
     } catch (err) {
@@ -1509,6 +1514,11 @@ function connectToHost(retryCount = 0) {
                     console.log('[SYNC] 📥 Received initial playlists from host:', Object.keys(msg.hostPlaylists));
                 }
                 if (msg.ytState && msg.ytState.videoId) {
+                    ytStateVersion = Math.max(ytStateVersion, Number(msg.ytState.stateVersion) || 0);
+                    ytRemoteStateTarget = {
+                        playing: Boolean(msg.ytState.playing),
+                        expiresAt: performance.now() + 5000,
+                    };
                     loadYouTubeVideo(msg.ytState.videoId, msg.ytState.time, msg.ytState.playing);
                 }
 
@@ -1673,6 +1683,11 @@ async function connectToOtherMembers() {
                             savePlaylist(); renderPlaylist();
                         }
                         if (msg.ytState && msg.ytState.videoId) {
+                            ytStateVersion = Math.max(ytStateVersion, Number(msg.ytState.stateVersion) || 0);
+                            ytRemoteStateTarget = {
+                                playing: Boolean(msg.ytState.playing),
+                                expiresAt: performance.now() + 5000,
+                            };
                             loadYouTubeVideo(msg.ytState.videoId, msg.ytState.time, msg.ytState.playing);
                         }
 
@@ -2658,6 +2673,8 @@ let ytDuration = 0;
 let ytTimer = null;
 let isSyncing = false;
 let ytSyncHeartbeat = null;
+let ytStateVersion = 0;
+let ytRemoteStateTarget = null;
 
 // ─── AD DETECTION & SYNC ──────────────────────────────
 let ytAdPlaying = false;       // True when THIS user's player is showing an ad
@@ -2725,10 +2742,17 @@ function onYtStateChange(event) {
 
     const videoId = (ytPlayer.getVideoData && ytPlayer.getVideoData().video_id) || ytVideoId || '';
     const currentTime = ytPlayer.getCurrentTime() || 0;
+    const nextPlaying = state === YT.PlayerState.PLAYING;
+    const remoteTriggered = Boolean(
+        ytRemoteStateTarget &&
+        ytRemoteStateTarget.playing === nextPlaying &&
+        performance.now() < ytRemoteStateTarget.expiresAt
+    );
+    if (remoteTriggered) ytRemoteStateTarget = null;
 
     // ALWAYS update local UI state, regardless of isSyncing flag
     // This ensures timeline updates even when using YouTube native controls
-    ytPlaying = state === YT.PlayerState.PLAYING;
+    ytPlaying = nextPlaying;
     updateYtIcon();
 
     console.log('[YT] ytPlaying set to:', ytPlaying, 'Starting/stopping timer...');
@@ -2753,13 +2777,15 @@ function onYtStateChange(event) {
 
     // Only send sync to peers if this wasn't triggered by a sync message, and the state is PLAYING or PAUSED.
     // This prevents echo loops and avoids sending spurious pause syncs during loading/UNSTARTED transitions.
-    if (!isSyncing && !ytAdPlaying && !ytAdOverlayShown && (state === YT.PlayerState.PLAYING || state === YT.PlayerState.PAUSED)) {
+    if (!remoteTriggered && !isSyncing && !ytAdPlaying && !ytAdOverlayShown && (state === YT.PlayerState.PLAYING || state === YT.PlayerState.PAUSED)) {
+        ytStateVersion += 1;
         console.log('[YT] Sending sync to peers:', { playing: ytPlaying, currentTime });
         sendSync({
             type: 'yt_state',
             videoId,
             currentTime,
             playing: ytPlaying,
+            stateVersion: ytStateVersion,
             sentBy: myName,
         });
     } else {
@@ -2826,7 +2852,8 @@ ytLoadBtn.addEventListener('click', () => {
     const videoId = extractYouTubeId(ytUrlInput.value.trim());
     if (!videoId) { toast('Paste a valid YouTube link 🔗', 'error'); return; }
     loadYouTubeVideo(videoId, 0, true);
-    sendSync({ type: 'yt_load', videoId, sentBy: myName });
+    ytStateVersion += 1;
+    sendSync({ type: 'yt_load', videoId, stateVersion: ytStateVersion, sentBy: myName });
     ytUrlInput.value = '';
 });
 ytUrlInput.addEventListener('keydown', e => { if (e.key === 'Enter') ytLoadBtn.click(); });
@@ -2859,11 +2886,13 @@ ytProgressBg.addEventListener('click', e => {
     ytPlayer.seekTo(seekTime, true);
     // Send seek position to partner so they stay in sync
     const videoId = (ytPlayer.getVideoData && ytPlayer.getVideoData().video_id) || ytVideoId || '';
+    ytStateVersion += 1;
     sendSync({
         type: 'yt_state',
         videoId,
         currentTime: seekTime,
         playing: ytPlaying,
+        stateVersion: ytStateVersion,
         sentBy: myName,
     });
 });
@@ -2871,6 +2900,10 @@ ytProgressBg.addEventListener('click', e => {
 function updateYtIcon() {
     ytPlayPauseBtn.querySelector('.play-icon').style.display = ytPlaying ? 'none' : 'block';
     ytPlayPauseBtn.querySelector('.pause-icon').style.display = ytPlaying ? 'block' : 'none';
+    musicToggleBtn?.classList.toggle(
+        'playing',
+        musicSection?.classList.contains('mobile-minimized') && Boolean(ytVideoId) && ytPlaying
+    );
 }
 
 function startYtTimer() {
@@ -2921,6 +2954,7 @@ function startSyncHeartbeat() {
             videoId,
             currentTime,
             playing: true,
+            stateVersion: ytStateVersion,
             sentBy: myName,
         });
     }, 5000); // Sync every 5 seconds while playing
@@ -3273,6 +3307,8 @@ async function handleSyncMessage(msg, senderId) {
 
     // ── Partner loaded a new song ─────────────────────
     if (msg.type === 'yt_load') {
+        ytStateVersion = Math.max(ytStateVersion, Number(msg.stateVersion) || 0);
+        ytRemoteStateTarget = { playing: true, expiresAt: performance.now() + 5000 };
         toast(`${msg.sentBy} is playing a song 🎵`, 'info');
         ytNowPlayingWho.textContent = `${msg.sentBy} picked this`;
         loadYouTubeVideo(msg.videoId, 0, true);
@@ -3285,11 +3321,17 @@ async function handleSyncMessage(msg, senderId) {
             console.log('[YT-AD] Ignoring incoming yt_state sync during ad playback');
             return;
         }
-        isSyncing = true;
+        const incomingVersion = Number(msg.stateVersion) || 0;
+        if (incomingVersion && incomingVersion < ytStateVersion) {
+            console.log('[YT] Ignoring stale playback sync', { incomingVersion, ytStateVersion });
+            return;
+        }
+        ytStateVersion = Math.max(ytStateVersion, incomingVersion);
         ytSyncText.textContent = `${msg.sentBy} ${msg.playing ? 'is playing' : 'paused'} 🌙`;
 
         if (msg.videoId && msg.videoId !== ytVideoId) {
             // Different video — load it
+            ytRemoteStateTarget = { playing: Boolean(msg.playing), expiresAt: performance.now() + 5000 };
             await loadYouTubeVideo(msg.videoId, msg.currentTime, msg.playing);
         } else if (ytPlayer && ytReady) {
             // Same video — sync position if drifted > 2s
@@ -3297,15 +3339,16 @@ async function handleSyncMessage(msg, senderId) {
                 ytPlayer.seekTo(msg.currentTime, true);
             }
             if (msg.playing && ytPlayer.getPlayerState() !== YT.PlayerState.PLAYING) {
+                ytRemoteStateTarget = { playing: true, expiresAt: performance.now() + 3000 };
                 ytPlayer.playVideo();
             } else if (!msg.playing && ytPlayer.getPlayerState() === YT.PlayerState.PLAYING) {
+                ytRemoteStateTarget = { playing: false, expiresAt: performance.now() + 3000 };
                 ytPlayer.pauseVideo();
             }
         }
         ytPlaying = msg.playing;
         updateYtIcon();
         if (ytPlaying) startYtTimer(); else clearInterval(ytTimer);
-        setTimeout(() => { isSyncing = false; }, 1500);
         return;
     }
 
@@ -3548,7 +3591,8 @@ window.playFromPlaylist = function (i) {
     const item = getActiveList()[i];
     if (!item) return;
     loadYouTubeVideo(item.videoId, 0, true);
-    sendSync({ type: 'yt_load', videoId: item.videoId, sentBy: myName });
+    ytStateVersion += 1;
+    sendSync({ type: 'yt_load', videoId: item.videoId, stateVersion: ytStateVersion, sentBy: myName });
 };
 
 window.deleteFromPlaylist = async function (i) {
@@ -4023,17 +4067,27 @@ function syncMobileDrawerState() {
 }
 
 function closeMobileMusic() {
+    const keepPlayerAlive = isMobileRoomLayout() && Boolean(ytVideoId);
     musicSection?.classList.remove('mobile-open');
+    musicSection?.classList.toggle('mobile-minimized', keepPlayerAlive);
     musicToggleBtn?.classList.remove('active');
+    musicToggleBtn?.classList.toggle('playing', keepPlayerAlive && ytPlaying);
     syncMobileDrawerState();
 }
 
 if (musicToggleBtn && musicSection) {
     musicToggleBtn.addEventListener('click', () => {
         const opening = !musicSection.classList.contains('mobile-open');
+        if (!opening) {
+            closeMobileMusic();
+            return;
+        }
+
         chatPanel?.classList.remove('show');
-        musicSection.classList.toggle('mobile-open', opening);
-        musicToggleBtn.classList.toggle('active', opening);
+        musicSection.classList.remove('mobile-minimized');
+        musicSection.classList.add('mobile-open');
+        musicToggleBtn.classList.add('active');
+        musicToggleBtn.classList.remove('playing');
         syncMobileDrawerState();
     });
 }
