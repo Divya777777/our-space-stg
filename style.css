@@ -943,80 +943,83 @@ body {
   font-size: 0.85rem;
 }
 
-.video-label {
+.video-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   position: absolute;
   top: 12px;
   left: 12px;
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(8px);
-  border-radius: 8px;
-  padding: 4px 10px;
-  font-size: 0.75rem;
-  color: var(--text-primary);
   z-index: 5;
+  pointer-events: none;
 }
 
-/* ── Speaking indicator (Google Meet-style, purple to match site theme) ── */
+.video-label {
+  background: rgba(18, 10, 45, 0.72);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 0.75rem;
+  color: var(--text-primary);
+  font-weight: 500;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  transition: border-color 0.2s, background 0.2s;
+}
+
+/* Active speaker glowing border */
+.video-panel.speaking-tile {
+  border-color: rgba(155, 109, 255, 0.65) !important;
+  box-shadow: 0 0 20px rgba(155, 109, 255, 0.3), inset 0 0 12px rgba(155, 109, 255, 0.15);
+}
+
+.video-panel.speaking-tile .video-label {
+  border-color: rgba(155, 109, 255, 0.35);
+  background: rgba(28, 16, 68, 0.85);
+}
+
+/* Speaking indicator (Google Meet-style sound waves inside a compact pill next to the label) */
 .speaking-indicator {
-  position: absolute;
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 3px;
-  padding: 5px 11px;
-  background: rgba(18, 10, 45, 0.72);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border-radius: 20px;
-  border: 1px solid rgba(155, 109, 255, 0.3);
-  box-shadow: 0 0 16px rgba(155, 109, 255, 0.18);
-  z-index: 10;
+  gap: 2.5px;
+  height: 28px;
+  padding: 0 10px;
+  background: rgba(155, 109, 255, 0.15);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-radius: 8px;
+  border: 1px solid rgba(155, 109, 255, 0.4);
+  box-shadow: 0 4px 12px rgba(155, 109, 255, 0.15);
   opacity: 0;
+  transform: scale(0.85);
+  transition: opacity 0.25s cubic-bezier(0.4, 0, 0.2, 1), transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
   pointer-events: none;
-  transition: opacity 0.25s ease, transform 0.25s ease;
-  white-space: nowrap;
-  transform: translateX(-50%) translateY(-4px);
 }
 
 .speaking-indicator.speaking {
   opacity: 1;
-  transform: translateX(-50%) translateY(0);
+  transform: scale(1);
 }
 
 .speak-bar {
   display: block;
   width: 3px;
-  border-radius: 3px;
+  height: 3px; /* minimum height */
+  border-radius: 1.5px;
   background: var(--accent-purple, #9b6dff);
-  box-shadow: 0 0 5px rgba(155, 109, 255, 0.8);
-  height: 4px;
-  transform-origin: center;
-  animation: speakWave 0.9s ease-in-out infinite;
-}
-
-.speak-bar:nth-child(1) { animation-duration: 0.75s; animation-delay: 0.00s; }
-.speak-bar:nth-child(2) { animation-duration: 0.55s; animation-delay: 0.12s; }
-.speak-bar:nth-child(3) { animation-duration: 0.95s; animation-delay: 0.04s; }
-.speak-bar:nth-child(4) { animation-duration: 0.65s; animation-delay: 0.20s; }
-.speak-bar:nth-child(5) { animation-duration: 0.80s; animation-delay: 0.09s; }
-
-@keyframes speakWave {
-  0%, 100% { height: 3px;  opacity: 0.5; }
-  40%       { height: 14px; opacity: 1;   }
-  65%       { height: 7px;  opacity: 0.75; }
-}
-
-.speaking-indicator:not(.speaking) .speak-bar {
-  animation-play-state: paused;
+  box-shadow: 0 0 4px rgba(155, 109, 255, 0.6);
+  transition: height 0.06s ease; /* super responsive real-time animation */
 }
 
 .video-panel.pip .speaking-indicator {
-  top: 5px;
-  padding: 3px 7px;
-  gap: 2px;
+  height: 20px;
+  padding: 0 6px;
+  gap: 1.5px;
+  border-radius: 5px;
 }
+
 .video-panel.pip .speak-bar {
   width: 2px;
 }
@@ -1211,54 +1214,98 @@ body {
   display: none;
 }
 
-/* musicToggleBtn — floating YouTube button, always visible (desktop + mobile).
-   On desktop it floats next to the chat button; mobile keeps its own position. */
-.music-toggle-btn {
+/* ── Floating Controls Container (Grouped bottom right) ── */
+.floating-controls {
   position: fixed;
-  right: 78px;
-  bottom: calc(20px + env(safe-area-inset-bottom, 0));
+  bottom: 24px;
+  right: 24px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   z-index: 3000;
+  pointer-events: none;
+}
+
+.floating-controls button {
+  pointer-events: auto;
+}
+
+.music-toggle-btn,
+.chat-toggle-btn {
   width: 50px;
   height: 50px;
-  border: 1px solid rgba(255, 0, 51, 0.4);
   border-radius: 50%;
   background: rgba(18, 12, 40, 0.9);
-  backdrop-filter: blur(10px);
-  color: white;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(155, 109, 255, 0.35);
+  color: rgba(255, 255, 255, 0.85);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 18px rgba(255, 0, 51, 0.2), 0 0 0 0 rgba(255,0,51,0);
-  transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
-  -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
   cursor: pointer;
+  position: relative;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.music-toggle-btn:hover {
-  background: rgba(255, 0, 51, 0.15);
-  border-color: rgba(255, 0, 51, 0.6);
-  transform: scale(1.06);
-  box-shadow: 0 6px 24px rgba(255, 0, 51, 0.32);
+.music-toggle-btn svg,
+.chat-toggle-btn svg {
+  width: 22px;
+  height: 22px;
+  display: block;
+  transition: transform 0.2s ease;
 }
 
-.music-toggle-btn.active {
-  background: rgba(255, 0, 51, 0.2);
-  box-shadow: 0 6px 24px rgba(255, 0, 51, 0.35);
-  transform: scale(0.95);
+.music-toggle-btn:hover,
+.chat-toggle-btn:hover {
+  background: rgba(155, 109, 255, 0.15);
+  border-color: rgba(155, 109, 255, 0.6);
+  transform: scale(1.08);
+  color: #fff;
+  box-shadow: 0 6px 24px rgba(155, 109, 255, 0.25);
 }
 
-/* Pulsing green dot when a song is playing (hidden panel but music running) */
+.music-toggle-btn:active,
+.chat-toggle-btn:active {
+  transform: scale(0.94);
+}
+
+.music-toggle-btn.active,
+.chat-toggle-btn.active {
+  background: rgba(155, 109, 255, 0.28);
+  border-color: rgba(155, 109, 255, 0.7);
+  color: #fff;
+}
+
+/* Pulsing green dot when song is playing and panel is hidden */
 .music-toggle-btn.playing::after {
   content: '';
   position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 9px;
-  height: 9px;
-  border: 2px solid rgba(18, 12, 40, 0.9);
+  top: -2px;
+  right: -2px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background: #38d66b;
   box-shadow: 0 0 8px rgba(56, 214, 107, 0.8);
+  border: 2px solid rgba(18, 12, 40, 0.9);
+}
+
+.chat-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  background: #ff4757;
+  color: white;
+  font-size: 0.7rem;
+  font-weight: bold;
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-family: 'Inter', sans-serif;
+  box-shadow: 0 2px 8px rgba(255, 71, 87, 0.4);
 }
 
 /* yt-header-btn: hidden — musicToggleBtn now handles all screen sizes */
@@ -2013,11 +2060,6 @@ body {
     transform: translateY(0) !important;
   }
 
-  .chat-toggle-btn {
-    bottom: 20px !important;
-    right: 16px !important;
-  }
-
   .chat-messages {
     max-height: calc(70vh - 130px) !important;
   }
@@ -2627,51 +2669,10 @@ body {
 /* ───────────────────────────────────────────────────────── */
 /*  SECURE LOCAL CHAT UI                                     */
 /* ───────────────────────────────────────────────────────── */
-.chat-toggle-btn {
-  position: fixed;
-  bottom: 24px;
-  left: 24px;
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  background: rgba(155, 109, 255, 0.2);
-  border: 1px solid rgba(155, 109, 255, 0.4);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  color: white;
-  font-size: 1.5rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  z-index: 1000;
-  box-shadow: 0 4px 16px rgba(155, 109, 255, 0.3);
-  transition: transform 0.2s, background 0.2s;
-}
-
-.chat-toggle-btn:hover {
-  transform: scale(1.05);
-  background: rgba(155, 109, 255, 0.3);
-}
-
-.chat-badge {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  background: #ff4757;
-  color: white;
-  font-size: 0.7rem;
-  font-weight: bold;
-  padding: 2px 6px;
-  border-radius: 10px;
-  font-family: 'Inter', sans-serif;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-}
-
 .chat-panel {
   position: fixed;
   bottom: 90px;
-  left: 24px;
+  right: 24px;
   width: 340px;
   height: 480px;
   max-height: calc(100vh - 120px);
@@ -3857,6 +3858,73 @@ body {
     box-shadow: 0 10px 32px rgba(0, 0, 0, 0.65), 0 0 18px rgba(255, 0, 51, 0.14);
   }
 
+  .floating-controls {
+    bottom: calc(14px + env(safe-area-inset-bottom, 0)) !important;
+    right: 14px !important;
+    gap: 10px !important;
+  }
+
+  .music-toggle-btn,
+  .chat-toggle-btn {
+    width: 52px !important;
+    height: 52px !important;
+  }
+
+  .music-toggle-btn.active {
+    z-index: 4100;
+  }
+
+  .music-toggle-btn.playing::after {
+    top: -2px;
+    right: -2px;
+    width: 10px;
+    height: 10px;
+  }
+
+  /* Hide the desktop header YouTube button on mobile — musicToggleBtn handles this */
+  .yt-header-btn {
+    display: none !important;
+  }
+
+  .music-toggle-btn:focus-visible,
+  .music-close-btn:focus-visible {
+    outline: 2px solid var(--accent-moon);
+    outline-offset: 3px;
+  }
+
+  .music-header,
+  .yt-input-row,
+  .playlist-header {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .yt-input-row {
+    flex-wrap: wrap;
+  }
+
+  .yt-url-wrapper {
+    flex: 1 1 220px;
+  }
+
+  .yt-url-input,
+  .chat-input,
+  .device-select {
+    font-size: 16px;
+  }
+
+  .yt-play-btn {
+    min-height: 44px;
+  }
+
+  .playlist-items {
+    max-height: 320px;
+  }
+
+  .pl-btns {
+    opacity: 1;
+  }
+
   .music-section.mobile-minimized > :not(.yt-now-playing-card),
   .music-section.mobile-minimized .yt-now-playing-card > :not(.yt-player-wrapper) {
     display: none !important;
@@ -3909,54 +3977,6 @@ body {
     font-size: 1rem;
   }
 
-  .music-toggle-btn {
-    position: fixed;
-    right: 78px;
-    bottom: calc(14px + env(safe-area-inset-bottom, 0));
-    z-index: 3000;
-    width: 54px;
-    height: 54px;
-    border: 1px solid rgba(255, 0, 51, 0.46);
-    border-radius: 50%;
-    background: rgba(20, 15, 45, 0.94);
-    color: white;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 4px 18px rgba(255, 0, 51, 0.24);
-    transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
-    -webkit-tap-highlight-color: transparent;
-  }
-  /* Hide the desktop header YouTube button on mobile — musicToggleBtn handles this */
-  .yt-header-btn {
-    display: none !important;
-  }
-
-  .music-toggle-btn.active {
-    z-index: 4100;
-    background: rgba(255, 0, 51, 0.22);
-    box-shadow: 0 6px 24px rgba(255, 0, 51, 0.38);
-    transform: scale(0.94);
-  }
-
-  .music-toggle-btn.playing::after {
-    content: "";
-    position: absolute;
-    top: 3px;
-    right: 3px;
-    width: 9px;
-    height: 9px;
-    border: 2px solid rgba(20, 15, 45, 0.94);
-    border-radius: 50%;
-    background: #38d66b;
-    box-shadow: 0 0 8px rgba(56, 214, 107, 0.8);
-  }
-
-  .music-toggle-btn:active,
-  .chat-toggle-btn:active {
-    transform: scale(0.9);
-  }
-
   .music-toggle-btn:focus-visible,
   .music-close-btn:focus-visible {
     outline: 2px solid var(--accent-moon);
@@ -3994,16 +4014,6 @@ body {
 
   .pl-btns {
     opacity: 1;
-  }
-
-  .chat-toggle-btn {
-    position: fixed;
-    left: auto !important;
-    right: 14px !important;
-    bottom: calc(14px + env(safe-area-inset-bottom, 0)) !important;
-    width: 54px;
-    height: 54px;
-    z-index: 3000;
   }
 
   .chat-panel {

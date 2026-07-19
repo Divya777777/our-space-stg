@@ -2069,14 +2069,18 @@ function startSpeakingMonitor(panelId, stream) {
     // Ensure the speaking indicator exists in this panel
     let indicator = panelEl.querySelector('.speaking-indicator');
     if (!indicator) {
+        const header = panelEl.querySelector('.video-header');
         indicator = document.createElement('div');
         indicator.className = 'speaking-indicator';
         indicator.setAttribute('aria-hidden', 'true');
-        indicator.innerHTML = '<span class="speak-bar"></span>'.repeat(5);
-        // Insert after video-label so it sits at the top
-        const label = panelEl.querySelector('.video-label');
-        if (label) label.after(indicator);
-        else panelEl.prepend(indicator);
+        indicator.innerHTML = '<span class="speak-bar"></span>'.repeat(3);
+        if (header) {
+            header.appendChild(indicator);
+        } else {
+            const label = panelEl.querySelector('.video-label');
+            if (label) label.after(indicator);
+            else panelEl.prepend(indicator);
+        }
     }
 
     // Need at least one audio track
@@ -2088,7 +2092,7 @@ function startSpeakingMonitor(panelId, stream) {
         const source = ctx.createMediaStreamSource(stream);
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 256;
-        analyser.smoothingTimeConstant = 0.5;
+        analyser.smoothingTimeConstant = 0.4;
         source.connect(analyser);
 
         const data = new Uint8Array(analyser.frequencyBinCount);
@@ -2110,6 +2114,7 @@ function startSpeakingMonitor(panelId, stream) {
                 if (!speaking && onCount >= SPEAK_ON_FRAMES) {
                     speaking = true;
                     indicator.classList.add('speaking');
+                    panelEl.classList.add('speaking-tile');
                 }
             } else {
                 offCount++;
@@ -2117,7 +2122,29 @@ function startSpeakingMonitor(panelId, stream) {
                 if (speaking && offCount >= SPEAK_OFF_FRAMES) {
                     speaking = false;
                     indicator.classList.remove('speaking');
+                    panelEl.classList.remove('speaking-tile');
                 }
+            }
+
+            // Real-time frequency-based bar heights
+            const bars = indicator.querySelectorAll('.speak-bar');
+            if (speaking && bars.length >= 3) {
+                // Low, mid-low, and mid-high human voice frequencies
+                const val0 = data[3] || 0;
+                const val1 = data[6] || 0;
+                const val2 = data[10] || 0;
+
+                const h0 = Math.max(3, Math.min(18, 3 + (val0 / 255) * 15));
+                const h1 = Math.max(3, Math.min(18, 3 + (val1 / 255) * 15));
+                const h2 = Math.max(3, Math.min(18, 3 + (val2 / 255) * 15));
+
+                bars[0].style.height = `${h0}px`;
+                bars[1].style.height = `${h1}px`;
+                bars[2].style.height = `${h2}px`;
+            } else {
+                bars.forEach(bar => {
+                    bar.style.height = '3px';
+                });
             }
 
             monitor.rafId = requestAnimationFrame(tick);
@@ -2138,11 +2165,18 @@ function stopSpeakingMonitor(panelId) {
     try { m.ctx.close(); } catch (e) {}
     speakingMonitors.delete(panelId);
 
-    // Remove the speaking class so the indicator fades out cleanly
+    // Remove the speaking class and classes cleanly
     const panelEl = document.getElementById(panelId);
     if (panelEl) {
+        panelEl.classList.remove('speaking-tile');
         const indicator = panelEl.querySelector('.speaking-indicator');
-        indicator?.classList.remove('speaking');
+        if (indicator) {
+            indicator.classList.remove('speaking');
+            const bars = indicator.querySelectorAll('.speak-bar');
+            bars.forEach(bar => {
+                bar.style.height = '3px';
+            });
+        }
     }
 }
 
@@ -2248,13 +2282,13 @@ function addVideoPanel(id, stream) {
         panel.id = `panel_${id}`;
         panel.innerHTML = `
             <video id="video_${id}" autoplay playsinline class="video-element active"></video>
-            <div class="video-label">${peersMap[id].name}</div>
-            <div class="speaking-indicator" aria-hidden="true">
-                <span class="speak-bar"></span>
-                <span class="speak-bar"></span>
-                <span class="speak-bar"></span>
-                <span class="speak-bar"></span>
-                <span class="speak-bar"></span>
+            <div class="video-header">
+                <div class="video-label">${peersMap[id].name}</div>
+                <div class="speaking-indicator" aria-hidden="true">
+                    <span class="speak-bar"></span>
+                    <span class="speak-bar"></span>
+                    <span class="speak-bar"></span>
+                </div>
             </div>
             <button class="expand-btn" data-target="panel_${id}" title="Expand">⛶</button>
         `;

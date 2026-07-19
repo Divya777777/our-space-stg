@@ -10,7 +10,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=Inter:wght@300;400;500;600&display=swap"
         rel="stylesheet" />
-    <link rel="stylesheet" href="style.css?v=18" />
+    <link rel="stylesheet" href="style.css?v=19" />
     <style>
         /* ── Auth Modal: inline to bypass caching ─────────── */
         #authModal {
@@ -174,14 +174,14 @@
                 <div class="placeholder" id="myPlaceholder">
                     <span class="placeholder-name">You</span>
                 </div>
-                <div class="video-label">You</div>
-                <!-- Speaking indicator: shown when mic audio level is detected -->
-                <div class="speaking-indicator" id="speakingIndicator_me" aria-hidden="true">
-                    <span class="speak-bar"></span>
-                    <span class="speak-bar"></span>
-                    <span class="speak-bar"></span>
-                    <span class="speak-bar"></span>
-                    <span class="speak-bar"></span>
+                <div class="video-header">
+                    <div class="video-label">You</div>
+                    <!-- Speaking indicator: shown when mic audio level is detected -->
+                    <div class="speaking-indicator" id="speakingIndicator_me" aria-hidden="true">
+                        <span class="speak-bar"></span>
+                        <span class="speak-bar"></span>
+                        <span class="speak-bar"></span>
+                    </div>
                 </div>
                 <button class="expand-btn" data-target="myVideoPanel" title="Expand">⛶</button>
                 
@@ -386,18 +386,21 @@
             </div>
         </section>
 
-        <!-- Mobile drawer controls (hidden on desktop) -->
-        <button class="music-toggle-btn" id="musicToggleBtn" title="Open YouTube Music" aria-label="Open YouTube Music">
-            <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
-                <path fill="#ff0033" d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.6 12 3.6 12 3.6s-7.5 0-9.4.5A3 3 0 0 0 .5 6.2 31 31 0 0 0 0 12a31 31 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.5 9.4.5 9.4.5s7.5 0 9.4-.5a3 3 0 0 0 2.1-2.1A31 31 0 0 0 24 12a31 31 0 0 0-.5-5.8Z"/>
-                <path fill="#fff" d="m9.6 15.6 6.3-3.6-6.3-3.6v7.2Z"/>
-            </svg>
-        </button>
-
-        <!-- Chat Panel (Floating) -->
-        <button class="chat-toggle-btn" id="chatToggleBtn" title="Open Room Chat">💬
-            <span class="chat-badge" id="chatBadge" style="display: none;">0</span>
-        </button>
+        <!-- Floating controls (grouped together bottom right) -->
+        <div class="floating-controls">
+            <button class="music-toggle-btn" id="musicToggleBtn" title="Toggle Music Panel" aria-label="Toggle Music Panel">
+                <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+                    <path fill="#ff0033" d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.6 12 3.6 12 3.6s-7.5 0-9.4.5A3 3 0 0 0 .5 6.2 31 31 0 0 0 0 12a31 31 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.5 9.4.5 9.4.5s7.5 0 9.4-.5a3 3 0 0 0 2.1-2.1A31 31 0 0 0 24 12a31 31 0 0 0-.5-5.8Z"/>
+                    <path fill="#fff" d="m9.6 15.6 6.3-3.6-6.3-3.6v7.2Z"/>
+                </svg>
+            </button>
+            <button class="chat-toggle-btn" id="chatToggleBtn" title="Open Room Chat" aria-label="Open Room Chat">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">
+                    <path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 9h12v2H6V9zm0-3h12v2H6V6zm0 6h9v2H6v-2z"/>
+                </svg>
+                <span class="chat-badge" id="chatBadge" style="display: none;">0</span>
+            </button>
+        </div>
         <div class="chat-panel" id="chatPanel">
             <div class="chat-header">
                 <span class="chat-title">Room Chat <small>🔒 Secure Local</small></span>
@@ -542,7 +545,7 @@
 
     <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
     <script src="api.js?v=4"></script>
-    <script src="room.js?v=20"></script>
+    <script src="room.js?v=21"></script>
 </body>
 
 </html>
