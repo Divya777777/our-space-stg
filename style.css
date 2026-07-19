@@ -660,6 +660,12 @@ body {
   min-height: 0;
   position: relative;
   z-index: 10;
+  transition: grid-template-columns 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* When the music panel is hidden, let videos expand to fill the full width */
+.room-main:has(.music-section.desktop-hidden) {
+  grid-template-columns: 1fr;
 }
 
 /* --- Video Section --- */
@@ -950,65 +956,64 @@ body {
   z-index: 5;
 }
 
-/* ── Speaking indicator (Google Meet-style sound waves) ── */
+/* ── Speaking indicator (Google Meet-style, purple to match site theme) ── */
 .speaking-indicator {
   position: absolute;
   top: 10px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 3px;
-  padding: 5px 10px;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  padding: 5px 11px;
+  background: rgba(18, 10, 45, 0.72);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   border-radius: 20px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(155, 109, 255, 0.3);
+  box-shadow: 0 0 16px rgba(155, 109, 255, 0.18);
   z-index: 10;
-  /* hidden until .speaking class is added */
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.2s ease;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  white-space: nowrap;
+  transform: translateX(-50%) translateY(-4px);
 }
 
 .speaking-indicator.speaking {
   opacity: 1;
+  transform: translateX(-50%) translateY(0);
 }
 
 .speak-bar {
   display: block;
   width: 3px;
   border-radius: 3px;
-  background: #4ade80; /* green, like Google Meet */
-  box-shadow: 0 0 6px rgba(74, 222, 128, 0.7);
-  /* base height — will be overridden by animation */
+  background: var(--accent-purple, #9b6dff);
+  box-shadow: 0 0 5px rgba(155, 109, 255, 0.8);
   height: 4px;
-  transform-origin: bottom center;
+  transform-origin: center;
   animation: speakWave 0.9s ease-in-out infinite;
 }
 
-/* Each bar animates at a slightly different height and delay */
-.speak-bar:nth-child(1) { animation-duration: 0.8s; animation-delay: 0.0s; }
-.speak-bar:nth-child(2) { animation-duration: 0.6s; animation-delay: 0.15s; }
-.speak-bar:nth-child(3) { animation-duration: 1.0s; animation-delay: 0.05s; }
-.speak-bar:nth-child(4) { animation-duration: 0.7s; animation-delay: 0.22s; }
-.speak-bar:nth-child(5) { animation-duration: 0.85s; animation-delay: 0.1s; }
+.speak-bar:nth-child(1) { animation-duration: 0.75s; animation-delay: 0.00s; }
+.speak-bar:nth-child(2) { animation-duration: 0.55s; animation-delay: 0.12s; }
+.speak-bar:nth-child(3) { animation-duration: 0.95s; animation-delay: 0.04s; }
+.speak-bar:nth-child(4) { animation-duration: 0.65s; animation-delay: 0.20s; }
+.speak-bar:nth-child(5) { animation-duration: 0.80s; animation-delay: 0.09s; }
 
 @keyframes speakWave {
-  0%, 100% { height: 4px;  opacity: 0.6; }
-  30%       { height: 16px; opacity: 1;   }
-  60%       { height: 8px;  opacity: 0.8; }
+  0%, 100% { height: 3px;  opacity: 0.5; }
+  40%       { height: 14px; opacity: 1;   }
+  65%       { height: 7px;  opacity: 0.75; }
 }
 
-/* Pause animation when not speaking (saves CPU) */
 .speaking-indicator:not(.speaking) .speak-bar {
   animation-play-state: paused;
 }
 
-/* Make the indicator fit nicely when the video panel is small (PiP) */
 .video-panel.pip .speaking-indicator {
-  top: 6px;
+  top: 5px;
   padding: 3px 7px;
   gap: 2px;
 }
@@ -1202,55 +1207,66 @@ body {
   gap: 8px;
 }
 
-.music-close-btn,
-.music-toggle-btn {
+.music-close-btn {
   display: none;
 }
 
-/* Desktop YouTube toggle button in the header */
-.yt-header-btn {
-  display: flex;
+/* musicToggleBtn — floating YouTube button, always visible (desktop + mobile).
+   On desktop it floats next to the chat button; mobile keeps its own position. */
+.music-toggle-btn {
+  position: fixed;
+  right: 78px;
+  bottom: calc(20px + env(safe-area-inset-bottom, 0));
+  z-index: 3000;
+  width: 50px;
+  height: 50px;
+  border: 1px solid rgba(255, 0, 51, 0.4);
+  border-radius: 50%;
+  background: rgba(18, 12, 40, 0.9);
+  backdrop-filter: blur(10px);
+  color: white;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 38px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid var(--glass-border);
+  box-shadow: 0 4px 18px rgba(255, 0, 51, 0.2), 0 0 0 0 rgba(255,0,51,0);
+  transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+  -webkit-tap-highlight-color: transparent;
   cursor: pointer;
-  transition: background 0.2s, border-color 0.2s, transform 0.15s;
-  position: relative;
-  flex-shrink: 0;
 }
 
-.yt-header-btn:hover {
-  background: rgba(255, 0, 51, 0.12);
-  border-color: rgba(255, 0, 51, 0.35);
+.music-toggle-btn:hover {
+  background: rgba(255, 0, 51, 0.15);
+  border-color: rgba(255, 0, 51, 0.6);
   transform: scale(1.06);
+  box-shadow: 0 6px 24px rgba(255, 0, 51, 0.32);
 }
 
-.yt-header-btn.active {
-  background: rgba(255, 0, 51, 0.08);
-  border-color: rgba(255, 0, 51, 0.4);
+.music-toggle-btn.active {
+  background: rgba(255, 0, 51, 0.2);
+  box-shadow: 0 6px 24px rgba(255, 0, 51, 0.35);
+  transform: scale(0.95);
 }
 
-/* Subtle ring pulse when a song is actively playing */
-.yt-header-btn.has-song::after {
+/* Pulsing green dot when a song is playing (hidden panel but music running) */
+.music-toggle-btn.playing::after {
   content: '';
   position: absolute;
-  inset: -3px;
+  top: 4px;
+  right: 4px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid rgba(18, 12, 40, 0.9);
   border-radius: 50%;
-  border: 2px solid rgba(255, 0, 51, 0.5);
-  animation: ytBtnRing 2s ease-in-out infinite;
-  pointer-events: none;
+  background: #38d66b;
+  box-shadow: 0 0 8px rgba(56, 214, 107, 0.8);
 }
 
-@keyframes ytBtnRing {
-  0%, 100% { opacity: 0.6; transform: scale(1); }
-  50%       { opacity: 0;   transform: scale(1.25); }
+/* yt-header-btn: hidden — musicToggleBtn now handles all screen sizes */
+.yt-header-btn {
+  display: none !important;
 }
 
-/* When the desktop panel is hidden */
+/* When the desktop panel is hidden, collapse cleanly */
 .music-section.desktop-hidden {
   display: none;
 }

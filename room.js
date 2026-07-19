@@ -2047,12 +2047,14 @@ function handleOutboundCall(call, id) {
 // Map of panelId -> { ctx, source, analyser, rafId }
 const speakingMonitors = new Map();
 
-// Threshold: 0–255 scale; 8 is a comfortable voice detection floor.
-const SPEAK_THRESHOLD = 8;
-// Require the level to stay above threshold for N consecutive frames
-// before we show the indicator (avoids flicker on plosives / noise).
-const SPEAK_ON_FRAMES  = 2;
-const SPEAK_OFF_FRAMES = 8; // debounce off — avoid rapid toggling
+// Threshold: 0–255 RMS scale.
+// 22 is well above mic self-noise / background hum but clearly below speech.
+const SPEAK_THRESHOLD = 22;
+// Require the signal to stay above threshold for N consecutive animation
+// frames before showing the indicator (prevents single-frame plosive flicker).
+const SPEAK_ON_FRAMES  = 4;
+// Keep indicator visible for N frames after going quiet (natural tail-off).
+const SPEAK_OFF_FRAMES = 14;
 
 /**
  * Attach a Web Audio analyser to `stream` and drive the
@@ -4266,6 +4268,13 @@ const musicCloseBtn = document.getElementById('musicCloseBtn');
 const ytStopBtn = document.getElementById('ytStopBtn');
 const ytHeaderBtn = document.getElementById('ytHeaderBtn');
 
+// Start with the YouTube panel hidden — user opens it via the floating YT button.
+// On mobile the panel is already off-screen (no mobile-open); on desktop we add
+// desktop-hidden so the grid collapses and videos fill the full width by default.
+if (musicSection && !window.matchMedia('(max-width: 600px), (pointer: coarse) and (max-width: 900px)').matches) {
+    musicSection.classList.add('desktop-hidden');
+}
+
 function isMobileRoomLayout() {
     return window.matchMedia('(max-width: 600px), (pointer: coarse) and (max-width: 900px)').matches;
 }
@@ -4334,33 +4343,36 @@ if (ytStopBtn) {
     ytStopBtn.addEventListener('click', () => stopYouTube(true));
 }
 
-// ── Desktop YouTube toggle button (shows/hides the music section panel)
-function toggleDesktopMusic() {
+// ── Unified YouTube panel toggle
+// Desktop: toggles the desktop-hidden class so the panel slides in/out and
+//          the video grid column expands to fill the space.
+// Mobile:  uses the existing mobile drawer (mobile-open class).
+function toggleMusicPanel() {
     if (!musicSection) return;
-    const hidden = musicSection.classList.contains('desktop-hidden');
-    musicSection.classList.toggle('desktop-hidden', !hidden);
-    ytHeaderBtn?.classList.toggle('active', !hidden ? false : true);
-}
 
-if (ytHeaderBtn) {
-    ytHeaderBtn.addEventListener('click', toggleDesktopMusic);
-}
-
-if (musicToggleBtn && musicSection) {
-    musicToggleBtn.addEventListener('click', () => {
+    if (isMobileRoomLayout()) {
+        // Mobile: use the drawer system
         const opening = !musicSection.classList.contains('mobile-open');
         if (!opening) {
             closeMobileMusic();
-            return;
+        } else {
+            chatPanel?.classList.remove('show');
+            musicSection.classList.remove('mobile-minimized');
+            musicSection.classList.add('mobile-open');
+            musicToggleBtn?.classList.add('active');
+            musicToggleBtn?.classList.remove('playing');
+            syncMobileDrawerState();
         }
+    } else {
+        // Desktop: show/hide the side panel
+        const isHidden = musicSection.classList.contains('desktop-hidden');
+        musicSection.classList.toggle('desktop-hidden', !isHidden);
+        musicToggleBtn?.classList.toggle('active', isHidden); // active = panel open
+    }
+}
 
-        chatPanel?.classList.remove('show');
-        musicSection.classList.remove('mobile-minimized');
-        musicSection.classList.add('mobile-open');
-        musicToggleBtn.classList.add('active');
-        musicToggleBtn.classList.remove('playing');
-        syncMobileDrawerState();
-    });
+if (musicToggleBtn && musicSection) {
+    musicToggleBtn.addEventListener('click', toggleMusicPanel);
 }
 
 musicCloseBtn?.addEventListener('click', closeMobileMusic);
