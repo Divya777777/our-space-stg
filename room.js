@@ -802,9 +802,17 @@ async function setupPeer() {
             window.location.hostname === '127.0.0.1' ||
             window.location.port !== '');
 
-    // Prefer direct P2P connectivity. TURN relay candidates are available only
-    // as an ICE fallback when host/STUN candidates cannot connect.
-    let iceServers = [{ urls: 'stun:stun.cloudflare.com:3478' }];
+    // Build the ICE server list: always include public STUN servers so a direct
+    // P2P connection is attempted first (fast, no relay).  TURN credentials are
+    // fetched from the backend and ADDED to the list as a fallback — they are
+    // only used when the direct/STUN path cannot be established (e.g. mobile
+    // carrier-grade NAT).  The previous code replaced STUN with TURN, forcing
+    // all traffic through the relay even when a direct route was available.
+    let iceServers = [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun.cloudflare.com:3478' },
+    ];
     try {
         const turnConfig = await api.getIceServers();
         if (turnConfig?.success && Array.isArray(turnConfig.iceServers)) {
@@ -816,12 +824,14 @@ async function setupPeer() {
                     .filter(url => url && !url.includes(':53'))
             })).filter(server => server.urls.length > 0);
 
-            iceServers = cloudflareServers;
-            console.log('[PEER] TURN fallback is available; direct ICE routes remain preferred.');
+            // ADD TURN to the existing STUN list — do NOT replace it.
+            // WebRTC will try all candidates in parallel and use the fastest route.
+            iceServers = [...iceServers, ...cloudflareServers];
+            console.log('[PEER] TURN fallback added; direct/STUN routes are still preferred.');
         }
     } catch (error) {
-        // Calls may still succeed directly. This preserves service if the TURN
-        // credential endpoint or Cloudflare is temporarily unavailable.
+        // Calls may still succeed via STUN/direct. This preserves service if the
+        // TURN credential endpoint or Cloudflare is temporarily unavailable.
         console.warn('[PEER] TURN fallback unavailable; trying direct/STUN connectivity only.', error.message);
     }
 
@@ -1382,7 +1392,10 @@ function acceptPeer(conn, guestName, requestId) {
             hostPlaylists: roomPlaylists,
             ytState: {
                 videoId: ytVideoId,
+                // Stamp the wall-clock so the joining device can add elapsed
+                // travel time when it finally starts playing, keeping them in sync.
                 time: ytPlayer?.getCurrentTime?.() || 0,
+                sentAt: Date.now(),
                 playing: ytPlaying,
                 stateVersion: ytStateVersion,
             }
@@ -1515,11 +1528,21 @@ function connectToHost(retryCount = 0) {
                 }
                 if (msg.ytState && msg.ytState.videoId) {
                     ytStateVersion = Math.max(ytStateVersion, Number(msg.ytState.stateVersion) || 0);
+                    // Compensate for travel time: if the video was playing when the
+                    // welcome was sent, offset the start position by the elapsed ms
+                    // so mobile doesn't start seconds behind the host.
+                    let joinStartTime = msg.ytState.time || 0;
+                    if (msg.ytState.playing && msg.ytState.sentAt) {
+                        const elapsedSec = (Date.now() - msg.ytState.sentAt) / 1000;
+                        joinStartTime = Math.max(0, joinStartTime + elapsedSec);
+                    }
                     ytRemoteStateTarget = {
                         playing: Boolean(msg.ytState.playing),
-                        expiresAt: performance.now() + 5000,
+                        expiresAt: performance.now() + 8000,
                     };
-                    loadYouTubeVideo(msg.ytState.videoId, msg.ytState.time, msg.ytState.playing);
+                    // syncLockMs=6000: prevents the PLAYING event (fired after
+                    // buffering completes on TURN) from echoing back to the host.
+                    loadYouTubeVideo(msg.ytState.videoId, joinStartTime, msg.ytState.playing, 6000);
                 }
 
                 if (msg.peers) {
@@ -1684,11 +1707,16 @@ async function connectToOtherMembers() {
                         }
                         if (msg.ytState && msg.ytState.videoId) {
                             ytStateVersion = Math.max(ytStateVersion, Number(msg.ytState.stateVersion) || 0);
+                            let joinStartTime = msg.ytState.time || 0;
+                            if (msg.ytState.playing && msg.ytState.sentAt) {
+                                const elapsedSec = (Date.now() - msg.ytState.sentAt) / 1000;
+                                joinStartTime = Math.max(0, joinStartTime + elapsedSec);
+                            }
                             ytRemoteStateTarget = {
                                 playing: Boolean(msg.ytState.playing),
-                                expiresAt: performance.now() + 5000,
+                                expiresAt: performance.now() + 8000,
                             };
-                            loadYouTubeVideo(msg.ytState.videoId, msg.ytState.time, msg.ytState.playing);
+                            loadYouTubeVideo(msg.ytState.videoId, joinStartTime, msg.ytState.playing, 6000);
                         }
 
                         if (msg.peers) {
@@ -1971,6 +1999,8 @@ async function answerIncomingCall(call) {
             peersMap[id].callConn = call;
             call.on('stream', s => addVideoPanel(id, s));
             call.on('close', () => removeVideoPanel(id));
+            // Start speaking monitor for local mic
+            startSpeakingMonitor('myVideoPanel', stream);
         } catch (e) {
             toast('Could not access camera/mic.', 'error');
         }
@@ -1989,6 +2019,9 @@ async function startCall() {
         startCallBtn.classList.add('end-call');
         isInCall = true;
 
+        // Start speaking monitor for local mic so the user sees their own indicator
+        startSpeakingMonitor('myVideoPanel', localStream);
+
         // Directly call all connected peers — no ringtone needed when everyone is in the room
         setTimeout(() => {
             Object.keys(peersMap).forEach(id => {
@@ -2006,6 +2039,113 @@ function handleOutboundCall(call, id) {
     call.on('stream', stream => { addVideoPanel(id, stream); });
     call.on('close', () => { removeVideoPanel(id); });
     call.on('error', () => { removeVideoPanel(id); });
+}
+
+// ─────────────────────────────────────────────────────
+//  SPEAKING INDICATOR  (Google Meet-style sound waves)
+// ─────────────────────────────────────────────────────
+// Map of panelId -> { ctx, source, analyser, rafId }
+const speakingMonitors = new Map();
+
+// Threshold: 0–255 scale; 8 is a comfortable voice detection floor.
+const SPEAK_THRESHOLD = 8;
+// Require the level to stay above threshold for N consecutive frames
+// before we show the indicator (avoids flicker on plosives / noise).
+const SPEAK_ON_FRAMES  = 2;
+const SPEAK_OFF_FRAMES = 8; // debounce off — avoid rapid toggling
+
+/**
+ * Attach a Web Audio analyser to `stream` and drive the
+ * `.speaking-indicator` element inside `panelEl`.
+ */
+function startSpeakingMonitor(panelId, stream) {
+    stopSpeakingMonitor(panelId); // clean up any previous monitor for this panel
+
+    const panelEl = document.getElementById(panelId);
+    if (!panelEl) return;
+
+    // Ensure the speaking indicator exists in this panel
+    let indicator = panelEl.querySelector('.speaking-indicator');
+    if (!indicator) {
+        indicator = document.createElement('div');
+        indicator.className = 'speaking-indicator';
+        indicator.setAttribute('aria-hidden', 'true');
+        indicator.innerHTML = '<span class="speak-bar"></span>'.repeat(5);
+        // Insert after video-label so it sits at the top
+        const label = panelEl.querySelector('.video-label');
+        if (label) label.after(indicator);
+        else panelEl.prepend(indicator);
+    }
+
+    // Need at least one audio track
+    const audioTracks = stream.getAudioTracks();
+    if (!audioTracks.length) return;
+
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const source = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.5;
+        source.connect(analyser);
+
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        let speaking = false;
+        let onCount  = 0;
+        let offCount = 0;
+
+        function tick() {
+            analyser.getByteFrequencyData(data);
+
+            // RMS across all frequency bins
+            let sum = 0;
+            for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
+            const rms = Math.sqrt(sum / data.length);
+
+            if (rms > SPEAK_THRESHOLD) {
+                onCount++;
+                offCount = 0;
+                if (!speaking && onCount >= SPEAK_ON_FRAMES) {
+                    speaking = true;
+                    indicator.classList.add('speaking');
+                }
+            } else {
+                offCount++;
+                onCount = 0;
+                if (speaking && offCount >= SPEAK_OFF_FRAMES) {
+                    speaking = false;
+                    indicator.classList.remove('speaking');
+                }
+            }
+
+            monitor.rafId = requestAnimationFrame(tick);
+        }
+
+        const monitor = { ctx, source, analyser, rafId: requestAnimationFrame(tick) };
+        speakingMonitors.set(panelId, monitor);
+    } catch (e) {
+        console.warn('[SPEAK] Could not create speaking monitor for', panelId, e);
+    }
+}
+
+function stopSpeakingMonitor(panelId) {
+    const m = speakingMonitors.get(panelId);
+    if (!m) return;
+    cancelAnimationFrame(m.rafId);
+    try { m.source.disconnect(); } catch (e) {}
+    try { m.ctx.close(); } catch (e) {}
+    speakingMonitors.delete(panelId);
+
+    // Remove the speaking class so the indicator fades out cleanly
+    const panelEl = document.getElementById(panelId);
+    if (panelEl) {
+        const indicator = panelEl.querySelector('.speaking-indicator');
+        indicator?.classList.remove('speaking');
+    }
+}
+
+function stopAllSpeakingMonitors() {
+    for (const panelId of speakingMonitors.keys()) stopSpeakingMonitor(panelId);
 }
 
 function optimiseOpusSdp(sdp) {
@@ -2107,6 +2247,13 @@ function addVideoPanel(id, stream) {
         panel.innerHTML = `
             <video id="video_${id}" autoplay playsinline class="video-element active"></video>
             <div class="video-label">${peersMap[id].name}</div>
+            <div class="speaking-indicator" aria-hidden="true">
+                <span class="speak-bar"></span>
+                <span class="speak-bar"></span>
+                <span class="speak-bar"></span>
+                <span class="speak-bar"></span>
+                <span class="speak-bar"></span>
+            </div>
             <button class="expand-btn" data-target="panel_${id}" title="Expand">⛶</button>
         `;
         document.getElementById('videoGrid').appendChild(panel);
@@ -2132,10 +2279,13 @@ function addVideoPanel(id, stream) {
             }
         }
     }
+    // Start speaking monitor for this peer's incoming stream
+    startSpeakingMonitor(`panel_${id}`, stream);
     document.querySelector('.video-grid').classList.remove('alone');
 }
 
 function removeVideoPanel(id) {
+    stopSpeakingMonitor(`panel_${id}`);
     const panel = document.getElementById(`panel_${id}`);
     if (panel) panel.remove();
 
@@ -2159,6 +2309,9 @@ function endCall() {
     }
     if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
     myVideo.srcObject = null; myVideo.classList.remove('active'); myPlaceholder.style.display = 'flex';
+
+    // Stop all speaking monitors
+    stopAllSpeakingMonitors();
 
     Object.keys(peersMap).forEach(id => {
         if (peersMap[id].callConn) {
@@ -2386,6 +2539,16 @@ async function applyDeviceSettings() {
             });
 
             localStream = newStream;
+
+            // Restart the local speaking monitor with the fresh stream.
+            // The old AudioContext source is now stale (old tracks were stopped).
+            if (isInCall) {
+                startSpeakingMonitor('myVideoPanel', newStream);
+                // Re-apply mute visual state on the fresh indicator
+                const myInd = document.querySelector('#myVideoPanel .speaking-indicator');
+                if (myInd) myInd.style.display = isMuted ? 'none' : '';
+            }
+
             toast('Device settings updated', 'success');
         } catch (e) {
             console.error('Error applying devices', e);
@@ -2423,6 +2586,18 @@ muteBtn.addEventListener('click', () => {
     muteBtn.innerHTML = isMuted
         ? `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/></svg>`
         : `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm0 2a2 2 0 0 0-2 2v6a2 2 0 0 0 4 0V5a2 2 0 0 0-2-2zm-1 14.93V21h2v-3.07A8.001 8.001 0 0 0 20 10h-2a6 6 0 0 1-12 0H4a8.001 8.001 0 0 0 7 7.93z"/></svg>`;
+
+    // Force-hide the speaking indicator when muted so background noise
+    // doesn't trigger a false positive on the analyser.
+    const myIndicator = document.querySelector('#myVideoPanel .speaking-indicator');
+    if (myIndicator) {
+        if (isMuted) {
+            myIndicator.classList.remove('speaking');
+            myIndicator.style.display = 'none';
+        } else {
+            myIndicator.style.display = '';  // restore, analyser takes over again
+        }
+    }
 });
 
 videoBtn.addEventListener('click', () => {
@@ -2805,9 +2980,11 @@ function extractYouTubeId(input) {
     return null;
 }
 
-async function loadYouTubeVideo(videoId, startSeconds = 0, autoplay = true) {
+// syncLockMs: how long to suppress outgoing yt_state echoes after a remote-triggered load.
+// Needs to be long enough for the player to buffer & fire PLAYING on high-latency TURN links.
+async function loadYouTubeVideo(videoId, startSeconds = 0, autoplay = true, syncLockMs = 0) {
     if (!ytReady || !ytPlayer) {
-        setTimeout(() => loadYouTubeVideo(videoId, startSeconds, autoplay), 500);
+        setTimeout(() => loadYouTubeVideo(videoId, startSeconds, autoplay, syncLockMs), 500);
         return;
     }
     ytVideoId = videoId;
@@ -2830,6 +3007,7 @@ async function loadYouTubeVideo(videoId, startSeconds = 0, autoplay = true) {
     // Show player card
     musicIdle.style.display = 'none';
     ytNowPlayingCard.style.display = 'flex';
+    ytHeaderBtn?.classList.add('has-song');
 
     // Fetch title via oEmbed (no API key required)
     try {
@@ -2838,6 +3016,14 @@ async function loadYouTubeVideo(videoId, startSeconds = 0, autoplay = true) {
         ytTrackTitle.textContent = d.title || '—';
         ytNowPlayingWho.textContent = 'Now Playing';
     } catch (e) { ytTrackTitle.textContent = '—'; }
+
+    // Hold isSyncing for the full syncLockMs window so that the PLAYING event
+    // fired after buffering (which can take 3-6 s on TURN relay) is not echoed
+    // back to the host as a new play command, causing the host to replay.
+    if (syncLockMs > 0) {
+        isSyncing = true;
+        setTimeout(() => { isSyncing = false; }, syncLockMs);
+    }
 
     if (autoplay) {
         ytPlayer.loadVideoById({ videoId, startSeconds });
@@ -2942,7 +3128,9 @@ function secToTime(s) {
     return `${m}:${sec.toString().padStart(2, '0')}`;
 }
 
-// Periodic heartbeat to keep players in sync and prevent drift
+// Periodic heartbeat to keep players in sync and prevent drift.
+// Interval is 8 s (not 5 s) to reduce churn over high-latency TURN relays;
+// the yt_state handler already corrects drifts > 4 s, so frequent pings are unnecessary.
 function startSyncHeartbeat() {
     stopSyncHeartbeat();
     ytSyncHeartbeat = setInterval(() => {
@@ -2957,7 +3145,7 @@ function startSyncHeartbeat() {
             stateVersion: ytStateVersion,
             sentBy: myName,
         });
-    }, 5000); // Sync every 5 seconds while playing
+    }, 8000); // Sync every 8 seconds — generous window for TURN relay latency
 }
 
 function stopSyncHeartbeat() {
@@ -3305,6 +3493,13 @@ async function handleSyncMessage(msg, senderId) {
         return;
     }
 
+    // ── Partner stopped the song ───────────────────────
+    if (msg.type === 'yt_stop') {
+        toast(`${msg.sentBy} stopped the music`, 'info');
+        stopYouTube(false); // false = don't re-broadcast back
+        return;
+    }
+
     // ── Partner loaded a new song ─────────────────────
     if (msg.type === 'yt_load') {
         ytStateVersion = Math.max(ytStateVersion, Number(msg.stateVersion) || 0);
@@ -3330,20 +3525,32 @@ async function handleSyncMessage(msg, senderId) {
         ytSyncText.textContent = `${msg.sentBy} ${msg.playing ? 'is playing' : 'paused'} 🌙`;
 
         if (msg.videoId && msg.videoId !== ytVideoId) {
-            // Different video — load it
-            ytRemoteStateTarget = { playing: Boolean(msg.playing), expiresAt: performance.now() + 5000 };
-            await loadYouTubeVideo(msg.videoId, msg.currentTime, msg.playing);
+            // Different video — load it.
+            // syncLockMs = 6000: keeps isSyncing=true for 6 s so that the PLAYING
+            // event the player fires after buffering (slow on TURN relay) is not
+            // echoed back as a new play command that makes the other device replay.
+            ytRemoteStateTarget = { playing: Boolean(msg.playing), expiresAt: performance.now() + 8000 };
+            await loadYouTubeVideo(msg.videoId, msg.currentTime, msg.playing, 6000);
         } else if (ytPlayer && ytReady) {
-            // Same video — sync position if drifted > 2s
-            if (Math.abs((ytPlayer.getCurrentTime() || 0) - msg.currentTime) > 2) {
+            // Same video — sync position only if drifted > 4 s.
+            // Threshold raised from 2 s: TURN relay adds round-trip latency so
+            // small drifts are expected and correcting them constantly creates
+            // replay loops on mobile.
+            if (Math.abs((ytPlayer.getCurrentTime() || 0) - msg.currentTime) > 4) {
+                isSyncing = true;
                 ytPlayer.seekTo(msg.currentTime, true);
+                setTimeout(() => { isSyncing = false; }, 2000);
             }
             if (msg.playing && ytPlayer.getPlayerState() !== YT.PlayerState.PLAYING) {
-                ytRemoteStateTarget = { playing: true, expiresAt: performance.now() + 3000 };
+                isSyncing = true;
+                ytRemoteStateTarget = { playing: true, expiresAt: performance.now() + 4000 };
                 ytPlayer.playVideo();
+                setTimeout(() => { isSyncing = false; }, 2000);
             } else if (!msg.playing && ytPlayer.getPlayerState() === YT.PlayerState.PLAYING) {
-                ytRemoteStateTarget = { playing: false, expiresAt: performance.now() + 3000 };
+                isSyncing = true;
+                ytRemoteStateTarget = { playing: false, expiresAt: performance.now() + 4000 };
                 ytPlayer.pauseVideo();
+                setTimeout(() => { isSyncing = false; }, 2000);
             }
         }
         ytPlaying = msg.playing;
@@ -4056,6 +4263,8 @@ const chatFileInput = document.getElementById('chatFileInput');
 const musicSection = document.getElementById('musicSection');
 const musicToggleBtn = document.getElementById('musicToggleBtn');
 const musicCloseBtn = document.getElementById('musicCloseBtn');
+const ytStopBtn = document.getElementById('ytStopBtn');
+const ytHeaderBtn = document.getElementById('ytHeaderBtn');
 
 function isMobileRoomLayout() {
     return window.matchMedia('(max-width: 600px), (pointer: coarse) and (max-width: 900px)').matches;
@@ -4073,6 +4282,68 @@ function closeMobileMusic() {
     musicToggleBtn?.classList.remove('active');
     musicToggleBtn?.classList.toggle('playing', keepPlayerAlive && ytPlaying);
     syncMobileDrawerState();
+}
+
+// ── stopYouTube: stops playback, clears all state, returns to idle.
+// Broadcasts yt_stop so both devices dismiss the player in sync.
+function stopYouTube(broadcast = true) {
+    // Stop & reset the YouTube player
+    if (ytPlayer && ytReady) {
+        try { ytPlayer.stopVideo(); } catch (e) { }
+    }
+    stopSyncHeartbeat();
+    stopAdDetection();
+    clearInterval(ytTimer);
+
+    // Reset all YT state variables
+    ytVideoId = null;
+    ytPlaying = false;
+    ytDuration = 0;
+    ytStateVersion = 0;
+    ytRemoteStateTarget = null;
+    ytAdPlaying = false;
+    ytAdOverlayShown = false;
+    ytManualAdPlaying = false;
+    ytRemoteAdWaiters.clear();
+    ytWasPlayingBeforeAd = false;
+
+    // Hide the now-playing card, show idle screen
+    ytNowPlayingCard.style.display = 'none';
+    musicIdle.style.display = 'flex';
+    hideAdOverlay();
+    updateAdReportButton();
+    updateYtIcon();
+
+    // Reset progress display
+    ytProgressFill.style.width = '0%';
+    ytCurrentTimeEl.textContent = '0:00';
+    ytTotalTimeEl.textContent = '0:00';
+    ytSyncText.textContent = 'Listening together 🌙';
+
+    // Update mobile toggle button state
+    musicToggleBtn?.classList.remove('playing');
+    ytHeaderBtn?.classList.remove('has-song');
+
+    if (broadcast) {
+        sendSync({ type: 'yt_stop', sentBy: myName });
+    }
+    toast('Stopped playing 🎵', 'info');
+}
+
+if (ytStopBtn) {
+    ytStopBtn.addEventListener('click', () => stopYouTube(true));
+}
+
+// ── Desktop YouTube toggle button (shows/hides the music section panel)
+function toggleDesktopMusic() {
+    if (!musicSection) return;
+    const hidden = musicSection.classList.contains('desktop-hidden');
+    musicSection.classList.toggle('desktop-hidden', !hidden);
+    ytHeaderBtn?.classList.toggle('active', !hidden ? false : true);
+}
+
+if (ytHeaderBtn) {
+    ytHeaderBtn.addEventListener('click', toggleDesktopMusic);
 }
 
 if (musicToggleBtn && musicSection) {

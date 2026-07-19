@@ -950,6 +950,73 @@ body {
   z-index: 5;
 }
 
+/* ── Speaking indicator (Google Meet-style sound waves) ── */
+.speaking-indicator {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  padding: 5px 10px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  z-index: 10;
+  /* hidden until .speaking class is added */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.speaking-indicator.speaking {
+  opacity: 1;
+}
+
+.speak-bar {
+  display: block;
+  width: 3px;
+  border-radius: 3px;
+  background: #4ade80; /* green, like Google Meet */
+  box-shadow: 0 0 6px rgba(74, 222, 128, 0.7);
+  /* base height — will be overridden by animation */
+  height: 4px;
+  transform-origin: bottom center;
+  animation: speakWave 0.9s ease-in-out infinite;
+}
+
+/* Each bar animates at a slightly different height and delay */
+.speak-bar:nth-child(1) { animation-duration: 0.8s; animation-delay: 0.0s; }
+.speak-bar:nth-child(2) { animation-duration: 0.6s; animation-delay: 0.15s; }
+.speak-bar:nth-child(3) { animation-duration: 1.0s; animation-delay: 0.05s; }
+.speak-bar:nth-child(4) { animation-duration: 0.7s; animation-delay: 0.22s; }
+.speak-bar:nth-child(5) { animation-duration: 0.85s; animation-delay: 0.1s; }
+
+@keyframes speakWave {
+  0%, 100% { height: 4px;  opacity: 0.6; }
+  30%       { height: 16px; opacity: 1;   }
+  60%       { height: 8px;  opacity: 0.8; }
+}
+
+/* Pause animation when not speaking (saves CPU) */
+.speaking-indicator:not(.speaking) .speak-bar {
+  animation-play-state: paused;
+}
+
+/* Make the indicator fit nicely when the video panel is small (PiP) */
+.video-panel.pip .speaking-indicator {
+  top: 6px;
+  padding: 3px 7px;
+  gap: 2px;
+}
+.video-panel.pip .speak-bar {
+  width: 2px;
+}
+
+
 .video-controls {
   position: absolute;
   bottom: 12px;
@@ -1140,6 +1207,54 @@ body {
   display: none;
 }
 
+/* Desktop YouTube toggle button in the header */
+.yt-header-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--glass-border);
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, transform 0.15s;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.yt-header-btn:hover {
+  background: rgba(255, 0, 51, 0.12);
+  border-color: rgba(255, 0, 51, 0.35);
+  transform: scale(1.06);
+}
+
+.yt-header-btn.active {
+  background: rgba(255, 0, 51, 0.08);
+  border-color: rgba(255, 0, 51, 0.4);
+}
+
+/* Subtle ring pulse when a song is actively playing */
+.yt-header-btn.has-song::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 0, 51, 0.5);
+  animation: ytBtnRing 2s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes ytBtnRing {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50%       { opacity: 0;   transform: scale(1.25); }
+}
+
+/* When the desktop panel is hidden */
+.music-section.desktop-hidden {
+  display: none;
+}
+
 .music-title {
   display: flex;
   align-items: center;
@@ -1278,6 +1393,33 @@ body {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   font-weight: 600;
+}
+
+/* Stop button — dismisses the player and stops the song for everyone */
+.yt-stop-btn {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 80, 80, 0.4);
+  background: rgba(255, 60, 60, 0.1);
+  color: #ff6b6b;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, transform 0.15s;
+  flex-shrink: 0;
+}
+
+.yt-stop-btn:hover {
+  background: rgba(255, 60, 60, 0.28);
+  border-color: rgba(255, 80, 80, 0.7);
+  transform: scale(1.1);
+}
+
+.yt-stop-btn:active {
+  transform: scale(0.95);
 }
 
 .np-dot {
@@ -3768,6 +3910,10 @@ body {
     box-shadow: 0 4px 18px rgba(255, 0, 51, 0.24);
     transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
     -webkit-tap-highlight-color: transparent;
+  }
+  /* Hide the desktop header YouTube button on mobile — musicToggleBtn handles this */
+  .yt-header-btn {
+    display: none !important;
   }
 
   .music-toggle-btn.active {

@@ -10,7 +10,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=Inter:wght@300;400;500;600&display=swap"
         rel="stylesheet" />
-    <link rel="stylesheet" href="style.css?v=15" />
+    <link rel="stylesheet" href="style.css?v=17" />
     <style>
         /* ── Auth Modal: inline to bypass caching ─────────── */
         #authModal {
@@ -148,6 +148,13 @@
                 </svg>
             </button>
             <span class="user-name-display" id="myNameDisplay"></span>
+            <!-- YouTube toggle: visible on desktop to open/close the music panel -->
+            <button class="yt-header-btn" id="ytHeaderBtn" title="Toggle YouTube Music" aria-label="Toggle YouTube music panel">
+                <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                    <path fill="#ff0033" d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.6 12 3.6 12 3.6s-7.5 0-9.4.5A3 3 0 0 0 .5 6.2 31 31 0 0 0 0 12a31 31 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.5 9.4.5 9.4.5s7.5 0 9.4-.5a3 3 0 0 0 2.1-2.1A31 31 0 0 0 24 12a31 31 0 0 0-.5-5.8Z"/>
+                    <path fill="#fff" d="m9.6 15.6 6.3-3.6-6.3-3.6v7.2Z"/>
+                </svg>
+            </button>
             <button class="pip-mode-btn" id="pipModeBtn" title="Keep partner video floating" aria-label="Open picture in picture">
                 <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
                     <path d="M19 7h-8v6h8V7zm2-4H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v-2H3V5h18v12h-1v2h1c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/>
@@ -175,6 +182,14 @@
                     <span class="placeholder-name">You</span>
                 </div>
                 <div class="video-label">You</div>
+                <!-- Speaking indicator: shown when mic audio level is detected -->
+                <div class="speaking-indicator" id="speakingIndicator_me" aria-hidden="true">
+                    <span class="speak-bar"></span>
+                    <span class="speak-bar"></span>
+                    <span class="speak-bar"></span>
+                    <span class="speak-bar"></span>
+                    <span class="speak-bar"></span>
+                </div>
                 <button class="expand-btn" data-target="myVideoPanel" title="Expand">⛶</button>
                 
                 <!-- Screenshare Options Menu -->
@@ -276,6 +291,10 @@
                 <div class="yt-np-label">
                     <span class="np-dot"></span>
                     <span id="ytNowPlayingWho">Now Playing</span>
+                    <!-- Stop/close button — stops the song for everyone and hides the player -->
+                    <button class="yt-stop-btn" id="ytStopBtn" title="Stop song" aria-label="Stop playing">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M6 6h12v12H6z"/></svg>
+                    </button>
                 </div>
 
                 <!-- YouTube iframe player -->
@@ -530,7 +549,7 @@
 
     <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
     <script src="api.js?v=4"></script>
-    <script src="room.js?v=17"></script>
+    <script src="room.js?v=19"></script>
 </body>
 
 </html>
