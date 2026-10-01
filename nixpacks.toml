@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["nodejs_20", "openssl"]
+nixPkgs = ["nodejs_22", "openssl"]
 
 [phases.install]
 cmds = ["cd backend && npm install"]
@@ -8,5 +8,5 @@ cmds = ["cd backend && npm install"]
 cmds = ["cd backend && npx prisma generate"]
 
 [start]
-cmd = "cd backend && npx prisma db push && node server.js"
+cmd = "cd backend && node server.js"
 

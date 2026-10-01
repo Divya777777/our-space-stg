@@ -111,7 +111,7 @@ async function getRoomByCode(roomCode) {
           }
         },
         playlists: {
-          where: { is_active: true }
+          where: { is_active: true, playlist_type: 'room' }
         }
       }
     });

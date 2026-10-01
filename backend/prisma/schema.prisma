@@ -183,7 +183,7 @@ model songs {
 
 model playlists {
   playlist_id      Int       @id @default(autoincrement())
-  room_id          Int
+  room_id          Int?
   created_by_user_id Int
   playlist_name    String
   playlist_type    String    @default("room")
@@ -192,7 +192,7 @@ model playlists {
   created_at       DateTime  @default(now())
   updated_at       DateTime  @default(now()) @updatedAt
 
-  room             rooms     @relation(fields: [room_id], references: [room_id], onDelete: Cascade)
+  room             rooms?    @relation(fields: [room_id], references: [room_id], onDelete: Cascade)
   creator          users     @relation(fields: [created_by_user_id], references: [user_id], onDelete: Cascade)
   songs            playlist_songs[]
   now_playing      now_playing[]

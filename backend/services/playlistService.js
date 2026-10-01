@@ -1,306 +1,137 @@
-const { PrismaClient } = require('@prisma/client');
+const { positiveId } = require('../utils/ids');
 
-const prisma = new PrismaClient();
-
-/**
- * Create a new playlist
- */
-async function createPlaylist(userId, playlistData) {
-  try {
-    const { roomId, playlistName, playlistType = 'room' } = playlistData;
-
-    // Check if user is a member of the room
-    const membership = await prisma.room_members.findFirst({
-      where: {
-        room_id: roomId,
-        user_id: userId,
-        left_at: null
-      }
-    });
-
-    if (!membership) {
-      return { success: false, error: 'You must be a room member to create playlists' };
+// Injecting the client lets permission and transaction behavior be tested without a live database.
+function createPlaylistService(prisma) {
+const failure = (error, status = 403) => ({ success: false, error, status });
+const includeSongs = {
+  creator: { select: { user_id: true, display_name: true, avatar_url: true } },
+  songs: { include: { song: true }, orderBy: [{ position: 'asc' }, { playlist_song_id: 'asc' }] }
+};
+const accessInclude = userId => ({ room: { include: {
+  members: { where: { user_id: userId, left_at: null } }
+} } });
+function canEdit(playlist, userId) {
+  if (!playlist?.is_active) return false;
+  if (playlist.playlist_type === 'personal') return playlist.created_by_user_id === userId;
+  return playlist.playlist_type === 'room' && playlist.room?.is_active && playlist.room.members.length > 0;
+}
+function serializePlaylist(p) {
+  return {
+    playlistId: String(p.playlist_id), roomId: p.room_id == null ? null : String(p.room_id),
+    playlistName: p.playlist_name, playlistType: p.playlist_type, isDefault: p.is_default,
+    creator: { userId: String(p.creator.user_id), displayName: p.creator.display_name, avatarUrl: p.creator.avatar_url },
+    songs: p.songs.map(ps => ({
+      playlistSongId: String(ps.playlist_song_id), songId: String(ps.song_id),
+      videoId: ps.song.video_id, title: ps.song.title, artist: ps.song.artist,
+      durationSeconds: ps.song.duration_seconds, thumbnailUrl: ps.song.thumbnail_url,
+      platform: ps.song.platform, position: ps.position, addedAt: ps.added_at
+    })), createdAt: p.created_at, updatedAt: p.updated_at
+  };
+}
+async function transaction(work) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await prisma.$transaction(work, { isolationLevel: 'Serializable' }); }
+    catch (error) { if (error.code !== 'P2034' || attempt >= 2) throw error; }
+  }
+}
+async function createPlaylist(userId, { roomId, playlistName, playlistType = 'room' }) {
+  if (!['personal', 'room'].includes(playlistType)) return failure('Invalid playlist type', 400);
+  if (typeof playlistName !== 'string' || !playlistName.trim() || playlistName.trim().length > 200) return failure('Invalid playlist name', 400);
+  const room = playlistType === 'room' ? positiveId(roomId) : null;
+  if (playlistType === 'room' && !room) return failure('A valid room ID is required', 400);
+  return transaction(async tx => {
+    if (playlistType === 'room') {
+      const member = await tx.room_members.findFirst({ where: { room_id: room, user_id: userId, left_at: null, room: { is_active: true } } });
+      if (!member) return failure('You must be a room member to create room playlists');
     }
-
-    const playlist = await prisma.playlists.create({
-      data: {
-        room_id: roomId,
-        created_by_user_id: userId,
-        playlist_name: playlistName,
-        playlist_type: playlistType,
-        is_default: false,
-        is_active: true
-      }
-    });
-
+    const playlist = await tx.playlists.create({ data: {
+      room_id: room, created_by_user_id: userId, playlist_name: playlistName.trim(),
+      playlist_type: playlistType, is_default: false, is_active: true
+    } });
     return { success: true, playlist };
-  } catch (error) {
-    console.error('Create playlist error:', error);
-    throw new Error('Failed to create playlist');
-  }
+  });
 }
-
-/**
- * Get playlists for a room (both room playlists and user's personal playlists)
- */
+async function getPersonalPlaylists(userId) {
+  const lists = await prisma.playlists.findMany({
+    where: { created_by_user_id: userId, playlist_type: 'personal', is_active: true },
+    include: includeSongs, orderBy: { created_at: 'asc' }
+  });
+  return lists.map(serializePlaylist);
+}
 async function getRoomPlaylists(roomId, userId) {
-  try {
-    // Fetch room playlists for this specific room
-    const roomPlaylists = await prisma.playlists.findMany({
-      where: {
-        room_id: roomId,
-        playlist_type: 'room',
-        is_active: true
-      },
-      include: {
-        creator: {
-          select: {
-            user_id: true,
-            display_name: true,
-            avatar_url: true
-          }
-        },
-        songs: {
-          include: {
-            song: true
-          },
-          orderBy: {
-            position: 'asc'
-          }
-        }
-      },
-      orderBy: [
-        { is_default: 'desc' },
-        { created_at: 'asc' }
-      ]
-    });
-
-    // Fetch user's personal playlists from ALL rooms
-    const personalPlaylists = userId ? await prisma.playlists.findMany({
-      where: {
-        created_by_user_id: userId,
-        playlist_type: 'personal',
-        is_active: true
-      },
-      include: {
-        creator: {
-          select: {
-            user_id: true,
-            display_name: true,
-            avatar_url: true
-          }
-        },
-        songs: {
-          include: {
-            song: true
-          },
-          orderBy: {
-            position: 'asc'
-          }
-        }
-      },
-      orderBy: {
-        created_at: 'asc'
-      }
-    }) : [];
-
-    // Combine both types of playlists
-    const allPlaylists = [...roomPlaylists, ...personalPlaylists];
-
-    return allPlaylists.map(p => ({
-      playlistId: p.playlist_id.toString(),
-      roomId: p.room_id.toString(),
-      playlistName: p.playlist_name,
-      playlistType: p.playlist_type,
-      isDefault: p.is_default,
-      creator: {
-        userId: p.creator.user_id.toString(),
-        displayName: p.creator.display_name,
-        avatarUrl: p.creator.avatar_url
-      },
-      songs: p.songs.map(ps => ({
-        playlistSongId: ps.playlist_song_id.toString(),
-        songId: ps.song.song_id.toString(),
-        videoId: ps.song.video_id,
-        title: ps.song.title,
-        artist: ps.song.artist,
-        durationSeconds: ps.song.duration_seconds,
-        thumbnailUrl: ps.song.thumbnail_url,
-        platform: ps.song.platform,
-        position: ps.position,
-        addedAt: ps.added_at
-      })),
-      createdAt: p.created_at,
-      updatedAt: p.updated_at
-    }));
-  } catch (error) {
-    console.error('Get room playlists error:', error);
-    throw new Error('Failed to fetch playlists');
-  }
+  const member = await prisma.room_members.findFirst({ where: { room_id: roomId, user_id: userId, left_at: null, room: { is_active: true } } });
+  if (!member) throw Object.assign(new Error('Room membership required'), { status: 403 });
+  const lists = await prisma.playlists.findMany({
+    where: { room_id: roomId, playlist_type: 'room', is_active: true },
+    include: includeSongs, orderBy: [{ is_default: 'desc' }, { created_at: 'asc' }]
+  });
+  return lists.map(serializePlaylist);
 }
-
-/**
- * Add song to playlist
- */
 async function addSongToPlaylist(playlistId, userId, songData) {
   try {
-    const { videoId, title, artist, durationSeconds, thumbnailUrl, platform = 'youtube' } = songData;
-
-    // Check if user has permission to add songs
-    const playlist = await prisma.playlists.findUnique({
-      where: { playlist_id: playlistId },
-      include: {
-        room: {
-          include: {
-            members: {
-              where: {
-                user_id: userId,
-                left_at: null
-              }
-            }
-          }
-        }
-      }
+    return await transaction(async tx => {
+      const playlist = await tx.playlists.findUnique({ where: { playlist_id: playlistId }, include: accessInclude(userId) });
+      if (!canEdit(playlist, userId)) return failure('Playlist unavailable or access denied');
+      const { videoId, title, artist, durationSeconds, thumbnailUrl, platform = 'youtube' } = songData;
+      const song = await tx.songs.upsert({ where: { video_id: videoId }, update: {}, create: {
+        video_id: videoId, title, artist, duration_seconds: durationSeconds ?? 0,
+        thumbnail_url: thumbnailUrl, platform
+      } });
+      const existing = await tx.playlist_songs.findFirst({ where: { playlist_id: playlistId, song_id: song.song_id } });
+      if (existing) return failure('Song already in playlist', 409);
+      const last = await tx.playlist_songs.findFirst({ where: { playlist_id: playlistId }, orderBy: { position: 'desc' } });
+      const ps = await tx.playlist_songs.create({ data: {
+        playlist_id: playlistId, song_id: song.song_id, added_by_user_id: userId, position: (last?.position ?? -1) + 1
+      } });
+      return { success: true, playlistSong: {
+        playlistSongId: String(ps.playlist_song_id), songId: String(song.song_id), videoId: song.video_id,
+        title: song.title, artist: song.artist, durationSeconds: song.duration_seconds,
+        thumbnailUrl: song.thumbnail_url, position: ps.position
+      } };
     });
-
-    if (!playlist) {
-      return { success: false, error: 'Playlist not found' };
-    }
-
-    if (playlist.room.members.length === 0) {
-      return { success: false, error: 'You must be a room member to add songs' };
-    }
-
-    // Check if song already exists
-    let song = await prisma.songs.findUnique({
-      where: { video_id: videoId }
-    });
-
-    // Create song if it doesn't exist
-    if (!song) {
-      song = await prisma.songs.create({
-        data: {
-          video_id: videoId,
-          title,
-          artist,
-          duration_seconds: durationSeconds,
-          thumbnail_url: thumbnailUrl,
-          platform
-        }
-      });
-    }
-
-    // Check if song is already in playlist
-    const existingPlaylistSong = await prisma.playlist_songs.findFirst({
-      where: {
-        playlist_id: playlistId,
-        song_id: song.song_id
-      }
-    });
-
-    if (existingPlaylistSong) {
-      return { success: false, error: 'Song already in playlist' };
-    }
-
-    // Get next position
-    const lastSong = await prisma.playlist_songs.findFirst({
-      where: { playlist_id: playlistId },
-      orderBy: { position: 'desc' }
-    });
-
-    const nextPosition = lastSong ? lastSong.position + 1 : 0;
-
-    // Add song to playlist
-    const playlistSong = await prisma.playlist_songs.create({
-      data: {
-        playlist_id: playlistId,
-        song_id: song.song_id,
-        added_by_user_id: userId,
-        position: nextPosition
-      },
-      include: {
-        song: true
-      }
-    });
-
-    return {
-      success: true,
-      playlistSong: {
-        playlistSongId: playlistSong.playlist_song_id.toString(),
-        songId: playlistSong.song.song_id.toString(),
-        videoId: playlistSong.song.video_id,
-        title: playlistSong.song.title,
-        artist: playlistSong.song.artist,
-        durationSeconds: playlistSong.song.duration_seconds,
-        thumbnailUrl: playlistSong.song.thumbnail_url,
-        position: playlistSong.position
-      }
-    };
   } catch (error) {
-    console.error('Add song error:', error);
-    throw new Error('Failed to add song to playlist');
+    if (error.code === 'P2002') return failure('Song already in playlist', 409);
+    throw error;
   }
 }
-
-/**
- * Remove song from playlist
- */
 async function removeSongFromPlaylist(playlistSongId, userId) {
-  try {
-    const playlistSong = await prisma.playlist_songs.findUnique({
-      where: { playlist_song_id: playlistSongId },
-      include: {
-        playlist: {
-          include: {
-            room: {
-              include: {
-                members: {
-                  where: {
-                    user_id: userId,
-                    left_at: null
-                  }
-                },
-                host: true
-              }
-            }
-          }
-        }
-      }
-    });
-
-    if (!playlistSong) {
-      return { success: false, error: 'Song not found in playlist' };
-    }
-
-    // Check if user is room member or host
-    const isMember = playlistSong.playlist.room.members.length > 0;
-    const isHost = playlistSong.playlist.room.host.user_id === userId;
-
-    if (!isMember && !isHost) {
-      return { success: false, error: 'You must be a room member to remove songs' };
-    }
-
-    // Delete playlist song
-    await prisma.playlist_songs.delete({
-      where: { playlist_song_id: playlistSongId }
-    });
-
+  return transaction(async tx => {
+    const item = await tx.playlist_songs.findUnique({ where: { playlist_song_id: playlistSongId }, include: { playlist: { include: accessInclude(userId) } } });
+    if (!item || !canEdit(item.playlist, userId)) return failure('Playlist unavailable or access denied');
+    await tx.playlist_songs.delete({ where: { playlist_song_id: playlistSongId } });
     return { success: true };
-  } catch (error) {
-    console.error('Remove song error:', error);
-    throw new Error('Failed to remove song from playlist');
-  }
+  });
 }
-
+async function reorderPlaylist(playlistId, userId, songOrder) {
+  if (!Array.isArray(songOrder) || songOrder.length > 1000) return failure('Invalid song order', 400);
+  const normalized = songOrder.map(item => ({ id: positiveId(item?.playlistSongId), position: item?.newPosition }));
+  if (normalized.some(item => !item.id || !Number.isInteger(item.position) || item.position < 0) ||
+      new Set(normalized.map(item => item.id)).size !== normalized.length ||
+      new Set(normalized.map(item => item.position)).size !== normalized.length) return failure('Invalid or duplicate song positions', 400);
+  return transaction(async tx => {
+    const playlist = await tx.playlists.findUnique({ where: { playlist_id: playlistId }, include: accessInclude(userId) });
+    if (!canEdit(playlist, userId)) return failure('Playlist unavailable or access denied');
+    const items = await tx.playlist_songs.findMany({ where: { playlist_id: playlistId }, select: { playlist_song_id: true } });
+    const ids = new Set(items.map(item => item.playlist_song_id));
+    if (items.length !== normalized.length || normalized.some(item => !ids.has(item.id) || item.position >= items.length)) {
+      return failure('Provide every song from this playlist exactly once, with positions 0 through length minus one', 400);
+    }
+    for (const item of normalized) {
+      await tx.playlist_songs.updateMany({ where: { playlist_song_id: item.id, playlist_id: playlistId }, data: { position: item.position } });
+    }
+    return { success: true };
+  });
+}
 /**
  * Update now playing for a room
  */
 async function updateNowPlaying(roomId, userId, nowPlayingData) {
   try {
+    return await transaction(async tx => {
     const { videoId, playlistId, currentTimeSeconds, isPlaying = true } = nowPlayingData;
 
     // Check if user is a member
-    const membership = await prisma.room_members.findFirst({
+    const membership = await tx.room_members.findFirst({
       where: {
         room_id: roomId,
         user_id: userId,
@@ -312,16 +143,26 @@ async function updateNowPlaying(roomId, userId, nowPlayingData) {
       return { success: false, error: 'You must be a room member' };
     }
 
+    let sharedPlaylistId = null;
+    if (playlistId != null) {
+      const selected = await tx.playlists.findUnique({ where: { playlist_id: playlistId }, include: accessInclude(userId) });
+      if (!canEdit(selected, userId) || (selected.playlist_type === 'room' && selected.room_id !== roomId)) {
+        return failure('Playlist unavailable in this room');
+      }
+      // Share the selected video, not the name/identity of a private playlist.
+      if (selected.playlist_type === 'room') sharedPlaylistId = playlistId;
+    }
+
     // Delete existing now playing for this room
-    await prisma.now_playing.deleteMany({
+    await tx.now_playing.deleteMany({
       where: { room_id: roomId }
     });
 
     // Create new now playing entry
-    const nowPlaying = await prisma.now_playing.create({
+    const nowPlaying = await tx.now_playing.create({
       data: {
         room_id: roomId,
-        playlist_id: playlistId ? playlistId : null,
+        playlist_id: sharedPlaylistId,
         video_id: videoId,
         current_time_seconds: currentTimeSeconds || 0,
         is_playing: isPlaying,
@@ -330,13 +171,13 @@ async function updateNowPlaying(roomId, userId, nowPlayingData) {
     });
 
     // Record in playback history
-    const song = await prisma.songs.findUnique({
+    const song = await tx.songs.findUnique({
       where: { video_id: videoId }
     });
 
     if (song) {
       // Check if already played recently (within last hour)
-      const recentPlay = await prisma.playback_history.findFirst({
+      const recentPlay = await tx.playback_history.findFirst({
         where: {
           song_id: song.song_id,
           room_id: roomId,
@@ -348,7 +189,7 @@ async function updateNowPlaying(roomId, userId, nowPlayingData) {
 
       if (recentPlay) {
         // Update play count
-        await prisma.playback_history.update({
+        await tx.playback_history.update({
           where: { history_id: recentPlay.history_id },
           data: {
             play_count: { increment: 1 },
@@ -357,7 +198,7 @@ async function updateNowPlaying(roomId, userId, nowPlayingData) {
         });
       } else {
         // Create new history entry
-        await prisma.playback_history.create({
+        await tx.playback_history.create({
           data: {
             song_id: song.song_id,
             room_id: roomId,
@@ -368,6 +209,7 @@ async function updateNowPlaying(roomId, userId, nowPlayingData) {
     }
 
     return { success: true, nowPlaying };
+    });
   } catch (error) {
     console.error('Update now playing error:', error);
     throw new Error('Failed to update now playing');
@@ -385,7 +227,8 @@ async function getNowPlaying(roomId) {
         playlist: {
           select: {
             playlist_id: true,
-            playlist_name: true
+            playlist_name: true,
+            playlist_type: true
           }
         }
       },
@@ -407,7 +250,7 @@ async function getNowPlaying(roomId) {
       nowPlayingId: nowPlaying.now_playing_id.toString(),
       roomId: nowPlaying.room_id.toString(),
       videoId: nowPlaying.video_id,
-      playlist: nowPlaying.playlist ? {
+      playlist: nowPlaying.playlist?.playlist_type === 'room' ? {
         playlistId: nowPlaying.playlist.playlist_id.toString(),
         playlistName: nowPlaying.playlist.playlist_name
       } : null,
@@ -463,56 +306,16 @@ async function getPlaybackHistory(roomId, limit = 50) {
   }
 }
 
-/**
- * Reorder songs in playlist
- */
-async function reorderPlaylist(playlistId, userId, songOrder) {
-  try {
-    // songOrder is an array of { playlistSongId, newPosition }
-
-    // Check permission
-    const playlist = await prisma.playlists.findUnique({
-      where: { playlist_id: playlistId },
-      include: {
-        room: {
-          include: {
-            members: {
-              where: {
-                user_id: userId,
-                left_at: null
-              }
-            }
-          }
-        }
-      }
-    });
-
-    if (!playlist || playlist.room.members.length === 0) {
-      return { success: false, error: 'Unauthorized' };
-    }
-
-    // Update positions
-    for (const item of songOrder) {
-      await prisma.playlist_songs.update({
-        where: { playlist_song_id: item.playlistSongId },
-        data: { position: item.newPosition }
-      });
-    }
-
-    return { success: true };
-  } catch (error) {
-    console.error('Reorder playlist error:', error);
-    throw new Error('Failed to reorder playlist');
-  }
+return { createPlaylist, getPersonalPlaylists, getRoomPlaylists, addSongToPlaylist,
+  removeSongFromPlaylist, reorderPlaylist, updateNowPlaying, getNowPlaying, getPlaybackHistory };
 }
 
-module.exports = {
-  createPlaylist,
-  getRoomPlaylists,
-  addSongToPlaylist,
-  removeSongFromPlaylist,
-  updateNowPlaying,
-  getNowPlaying,
-  getPlaybackHistory,
-  reorderPlaylist
+// Lazy default client keeps factory-only tests independent of generated Prisma code.
+let service;
+const methods = ['createPlaylist', 'getPersonalPlaylists', 'getRoomPlaylists', 'addSongToPlaylist',
+  'removeSongFromPlaylist', 'reorderPlaylist', 'updateNowPlaying', 'getNowPlaying', 'getPlaybackHistory'];
+module.exports = { createPlaylistService };
+for (const method of methods) module.exports[method] = (...args) => {
+  service ||= createPlaylistService(new (require('@prisma/client').PrismaClient)());
+  return service[method](...args);
 };

@@ -39,7 +39,7 @@ router.post('/google', authLimiter, validateGoogleAuth, async (req, res) => {
 
     // Log failed authentication
     await logFailedLogin(
-      req.body.credential || 'unknown',
+      'google',
       getClientIp(req),
       getUserAgent(req),
       error.message
@@ -89,7 +89,7 @@ router.post('/refresh', authLimiter, async (req, res) => {
  * POST /api/auth/logout
  * Logout user and invalidate session
  */
-router.post('/logout', async (req, res) => {
+router.post('/logout', authenticate, async (req, res) => {
   try {
     // Session ID should be attached by authenticate middleware
     if (req.sessionId) {

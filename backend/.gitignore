@@ -132,3 +132,8 @@ Thumbs.db
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
+
+# Include reproducible dependencies; exclude every private environment file.
+!package-lock.json
+.env.*
+!.env.example

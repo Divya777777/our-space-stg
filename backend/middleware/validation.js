@@ -1,4 +1,5 @@
 const { body, param, query, validationResult } = require('express-validator');
+const { positiveId } = require('../utils/ids');
 
 /**
  * Handle validation errors
@@ -7,11 +8,9 @@ function handleValidationErrors(req, res, next) {
   const errors = validationResult(req);
 
   if (!errors.isEmpty()) {
-    console.log('[VALIDATION ERROR] Request body:', req.body);
-    console.log('[VALIDATION ERROR] Errors:', errors.array());
     return res.status(400).json({
       error: 'Validation failed',
-      details: errors.array()
+      details: errors.array().map(({ value, ...error }) => error)
     });
   }
 
@@ -42,15 +41,15 @@ const validateRoomCreation = [
   body('maxMembers')
     .optional()
     .isInt({ min: 2, max: 50 })
-    .withMessage('Max members must be between 2 and 50'),
+    .withMessage('Max members must be between 2 and 50').toInt(),
   body('isPublic')
     .optional()
     .isBoolean()
-    .withMessage('isPublic must be a boolean'),
+    .withMessage('isPublic must be a boolean').toBoolean(),
   body('requiresApproval')
     .optional()
     .isBoolean()
-    .withMessage('requiresApproval must be a boolean'),
+    .withMessage('requiresApproval must be a boolean').toBoolean(),
   handleValidationErrors
 ];
 
@@ -121,10 +120,11 @@ const validateFileUpload = [
  * Validation rules for creating playlist
  */
 const validatePlaylistCreation = [
-  body('roomId')
-    .notEmpty()
-    .isInt()
-    .withMessage('Valid room ID is required'),
+  body('roomId').custom((value, { req }) => {
+    if (req.body.playlistType === 'personal' && value == null) return true;
+    if (positiveId(value) === null) throw new Error('A valid room ID is required for room playlists');
+    return true;
+  }).customSanitizer(value => value == null ? null : positiveId(value)),
   body('playlistName')
     .notEmpty()
     .withMessage('Playlist name is required')
@@ -165,9 +165,9 @@ const validateAddSong = [
     .isLength({ max: 200 })
     .withMessage('Artist name must be less than 200 characters'),
   body('durationSeconds')
-    .notEmpty()
+    .optional()
     .isInt({ min: 0 })
-    .withMessage('Duration must be a non-negative integer'),
+    .withMessage('Duration must be a non-negative integer').toInt(),
   body('thumbnailUrl')
     .optional()
     .isURL()
@@ -191,15 +191,15 @@ const validateNowPlaying = [
   body('playlistId')
     .optional()
     .isInt()
-    .withMessage('Playlist ID must be an integer'),
+    .withMessage('Playlist ID must be an integer').toInt(),
   body('currentTimeSeconds')
     .optional()
     .isFloat({ min: 0 })
-    .withMessage('Current time must be a positive number'),
+    .withMessage('Current time must be a positive number').toFloat(),
   body('isPlaying')
     .optional()
     .isBoolean()
-    .withMessage('isPlaying must be a boolean'),
+    .withMessage('isPlaying must be a boolean').toBoolean(),
   handleValidationErrors
 ];
 
@@ -215,7 +215,7 @@ const validateJoinApproval = [
     .exists()
     .withMessage('Approval status is required')
     .isBoolean()
-    .withMessage('Approval status must be a boolean'),
+    .withMessage('Approval status must be a boolean').toBoolean(),
   handleValidationErrors
 ];
 
@@ -253,7 +253,7 @@ const validateRoomVisit = [
   body('timeSpentSeconds')
     .optional()
     .isInt({ min: 0 })
-    .withMessage('Time spent must be a positive integer'),
+    .withMessage('Time spent must be a positive integer').toInt(),
   handleValidationErrors
 ];
 
@@ -268,7 +268,7 @@ const validateFavoriteToggle = [
   body('isFavorite')
     .notEmpty()
     .isBoolean()
-    .withMessage('isFavorite must be a boolean'),
+    .withMessage('isFavorite must be a boolean').toBoolean(),
   handleValidationErrors
 ];
 

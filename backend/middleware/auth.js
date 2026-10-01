@@ -1,3 +1,5 @@
+const { randomUUID } = require('crypto');
+const { positiveId } = require('../utils/ids');
 const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
 const { logSecurityEvent } = require('../utils/auditLogger');
@@ -12,7 +14,7 @@ const prisma = new PrismaClient();
  */
 function generateAccessToken(payload) {
   return jwt.sign(payload, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN || '24h'
+    expiresIn: process.env.JWT_EXPIRES_IN || '24h', jwtid: randomUUID()
   });
 }
 
@@ -23,7 +25,7 @@ function generateAccessToken(payload) {
  */
 function generateRefreshToken(payload) {
   return jwt.sign(payload, process.env.JWT_REFRESH_SECRET, {
-    expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d'
+    expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d', jwtid: randomUUID()
   });
 }
 
@@ -109,8 +111,8 @@ async function authenticate(req, res, next) {
       }
     }
 
-    // Update last accessed time
-    await prisma.user_sessions.update({
+    // Avoid a database write on every room heartbeat or ICE candidate.
+    if (Date.now() - new Date(session.last_accessed_at).getTime() > 60000) await prisma.user_sessions.update({
       where: { session_id: session.session_id },
       data: { last_accessed_at: new Date() }
     });
@@ -189,7 +191,7 @@ async function optionalAuthenticate(req, res, next) {
  */
 async function isRoomHost(req, res, next) {
   try {
-    const roomId = req.params.roomId || req.body.roomId;
+    const roomId = positiveId(req.params.roomId || req.body.roomId);
 
     if (!roomId) {
       return res.status(400).json({ error: 'Room ID required' });
@@ -220,7 +222,7 @@ async function isRoomHost(req, res, next) {
  */
 async function isRoomMember(req, res, next) {
   try {
-    const roomId = req.params.roomId || req.body.roomId;
+    const roomId = positiveId(req.params.roomId || req.body.roomId);
 
     if (!roomId) {
       return res.status(400).json({ error: 'Room ID required' });
@@ -269,7 +271,7 @@ async function refreshAccessToken(refreshToken) {
       }
     });
 
-    if (!session) {
+    if (!session || session.user.deleted_at || (session.user.account_locked && (!session.user.locked_until || new Date(session.user.locked_until) > new Date()))) {
       throw new Error('Invalid or expired refresh token');
     }
 
@@ -280,8 +282,7 @@ async function refreshAccessToken(refreshToken) {
     });
 
     // Update session with new access token
-    const expiresAt = new Date();
-    expiresAt.setHours(expiresAt.getHours() + 24); // 24 hours
+    const expiresAt = new Date(jwt.decode(newAccessToken).exp * 1000);
 
     await prisma.user_sessions.update({
       where: { session_id: session.session_id },

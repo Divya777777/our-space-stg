@@ -1,8 +1,13 @@
 const express = require('express');
 const router = express.Router();
+const { validateIdParams } = require('../utils/ids');
+for (const key of ['roomId', 'playlistId', 'playlistSongId']) {
+  router.param(key, (req, res, next) => validateIdParams(req, res, next));
+}
 const {
   createPlaylist,
   getRoomPlaylists,
+  getPersonalPlaylists,
   addSongToPlaylist,
   removeSongFromPlaylist,
   updateNowPlaying,
@@ -26,14 +31,14 @@ router.post('/', authenticate, validatePlaylistCreation, async (req, res) => {
     const result = await createPlaylist(req.user.user_id, req.body);
 
     if (!result.success) {
-      return res.status(400).json(result);
+      return res.status(result.status || 400).json(result);
     }
 
     res.status(201).json({
       success: true,
       playlist: {
         playlistId: result.playlist.playlist_id.toString(),
-        roomId: result.playlist.room_id.toString(),
+        roomId: result.playlist.room_id == null ? null : result.playlist.room_id.toString(),
         playlistName: result.playlist.playlist_name,
         playlistType: result.playlist.playlist_type,
         isDefault: result.playlist.is_default,
@@ -51,15 +56,26 @@ router.post('/', authenticate, validatePlaylistCreation, async (req, res) => {
   }
 });
 
+/** List the signed-in user's personal library without requiring a room. */
+router.get('/personal', authenticate, async (req, res) => {
+  try {
+    res.json({ success: true, playlists: await getPersonalPlaylists(req.user.user_id) });
+  } catch (error) {
+    res.status(500).json({ success: false, error: 'Failed to fetch personal playlists' });
+  }
+});
+
 /**
  * GET /api/playlists/room/:roomId
- * Get all playlists for a room (room playlists + user's personal playlists)
+ * Get only playlists belonging to this room
  */
 router.get('/room/:roomId', authenticate, isRoomMember, async (req, res) => {
   try {
     const roomId = parseInt(req.params.roomId);
     const userId = parseInt(req.user.user_id);
-    const playlists = await getRoomPlaylists(roomId, userId);
+    const roomPlaylists = await getRoomPlaylists(roomId, userId);
+    // Preserve the website's combined response; native clients use /api/mobile.
+    const playlists = req.query.scope === 'room' ? roomPlaylists : [...roomPlaylists, ...await getPersonalPlaylists(userId)];
 
     res.json({
       success: true,
@@ -86,7 +102,7 @@ router.post('/:playlistId/songs', authenticate, validateAddSong, async (req, res
     const result = await addSongToPlaylist(playlistId, req.user.user_id, req.body);
 
     if (!result.success) {
-      return res.status(400).json(result);
+      return res.status(result.status || 400).json(result);
     }
 
     res.status(201).json(result);
@@ -111,7 +127,7 @@ router.delete('/songs/:playlistSongId', authenticate, async (req, res) => {
     const result = await removeSongFromPlaylist(playlistSongId, req.user.user_id);
 
     if (!result.success) {
-      return res.status(400).json(result);
+      return res.status(result.status || 400).json(result);
     }
 
     res.json(result);
@@ -136,7 +152,7 @@ router.post('/room/:roomId/now-playing', authenticate, isRoomMember, validateNow
     const result = await updateNowPlaying(roomId, req.user.user_id, req.body);
 
     if (!result.success) {
-      return res.status(400).json(result);
+      return res.status(result.status || 400).json(result);
     }
 
     res.json({
@@ -238,7 +254,7 @@ router.put('/:playlistId/reorder', authenticate, async (req, res) => {
     const result = await reorderPlaylist(playlistId, req.user.user_id, songOrder);
 
     if (!result.success) {
-      return res.status(400).json(result);
+      return res.status(result.status || 400).json(result);
     }
 
     res.json(result);

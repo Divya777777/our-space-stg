@@ -63,6 +63,8 @@ if (NODE_ENV === 'development') {
 }
 
 // Rate limiting
+// Mobile polling has its own authenticated per-user limiter.
+app.use('/api/mobile', require('./routes/mobile').createMobileRouter());
 app.use('/api', apiLimiter);
 
 // ====================

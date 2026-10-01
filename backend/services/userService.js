@@ -19,43 +19,18 @@ async function authenticateWithGoogle(credential, ipAddress, userAgent) {
     const payload = ticket.getPayload();
     const { sub: googleId, email, name, picture } = payload;
 
-    // Find or create user
-    let user = await prisma.users.findUnique({
-      where: { google_id: googleId }
-    });
-
-    if (!user) {
-      // Create new user
-      user = await prisma.users.create({
-        data: {
-          google_id: googleId,
-          email,
-          display_name: name,
-          avatar_url: picture
-        }
-      });
-
-      // Create default preferences
-      await prisma.user_preferences.create({
-        data: {
-          user_id: user.user_id,
-          theme: 'light',
-          notifications_enabled: true,
-          auto_join_rooms: false,
-          default_video_quality: 'auto'
-        }
-      });
-    } else {
-      // Update last login
-      await prisma.users.update({
-        where: { user_id: user.user_id },
-        data: {
-          last_login_at: new Date(),
-          last_login_ip: ipAddress,
-          failed_login_attempts: 0
-        }
-      });
+    if (!googleId || !email || payload.email_verified !== true) throw new Error('Verified Google account required');
+    let user = await prisma.users.findUnique({ where: { google_id: googleId } });
+    if (user?.deleted_at || (user?.account_locked && (!user.locked_until || new Date(user.locked_until) > new Date()))) {
+      throw new Error('Account is unavailable');
     }
+    // Unique provider identity and nested creation prevent partial signup records.
+    user = await prisma.users.upsert({
+      where: { google_id: googleId },
+      create: { google_id: googleId, email, display_name: name || 'Stargazer', avatar_url: picture,
+        preferences: { create: { theme: 'dark', notifications_enabled: true, auto_join_rooms: false, default_video_quality: 'auto' } } },
+      update: { last_login_at: new Date(), last_login_ip: ipAddress, failed_login_attempts: 0 }
+    });
 
     // Generate tokens
     const accessToken = generateAccessToken({
@@ -69,11 +44,9 @@ async function authenticateWithGoogle(credential, ipAddress, userAgent) {
     });
 
     // Create session
-    const accessExpiresAt = new Date();
-    accessExpiresAt.setHours(accessExpiresAt.getHours() + 24);
+    const accessExpiresAt = new Date(require('jsonwebtoken').decode(accessToken).exp * 1000);
 
-    const refreshExpiresAt = new Date();
-    refreshExpiresAt.setDate(refreshExpiresAt.getDate() + 7);
+    const refreshExpiresAt = new Date(require('jsonwebtoken').decode(refreshToken).exp * 1000);
 
     const session = await prisma.user_sessions.create({
       data: {

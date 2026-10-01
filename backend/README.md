@@ -1,408 +1,94 @@
-# Our Space - Backend API
+# Our Space shared website and mobile backend
 
-Production-ready backend server for Our Space P2P video chat and music streaming application.
+Extends the existing website backend with authenticated mobile routes and account-owned personal playlists. The service remains in `backend/` so existing deployment root directories continue to work. See `DEPLOYMENT.md` for the required database rollout.
 
-## Features
+## Changes
 
-✅ **Authentication & Security**
-- Google OAuth 2.0 integration
-- JWT access tokens (24h) & refresh tokens (7d)
-- Session management with IP & user agent tracking
-- Account lockout after failed attempts
-- AES-256-GCM message encryption
+- Personal playlists have `room_id = NULL`, belong to their creator, and survive room deletion. Creating or listing a personal playlist requires no room membership.
+- `GET /api/playlists/personal` returns only the authenticated user's personal library.
+- `GET /api/playlists/room/:roomId` preserves the website's combined response (room plus the caller's personal playlists). Use `?scope=room` for room-only results. The native API independently scopes personal and room data.
+- Add/remove/reorder operations require personal ownership or active membership in an active room. Private playlist ownership is enforced even when another user is in the same room.
+- Reordering requires every current playlist song exactly once, with distinct positions from zero to length minus one. Foreign playlist item IDs are rejected before updates. Writes run in serializable transactions with bounded conflict retries.
+- Personal playlist names/IDs are not exposed in a room's playback response when a person shares a video from their private library. A room playlist from another room cannot be selected.
+- Playback replacement is transactional, avoiding a committed empty state between delete/create.
+- Logout now authenticates and revokes the current session. Failed Google login auditing and validation errors no longer echo the submitted credential.
+- Room route IDs are validated and converted before Prisma queries. Relevant numeric and boolean request fields are normalized.
+- Track duration can be omitted when metadata is not yet available (stored as zero, consistent with the existing schema).
 
-✅ **Room Management**
-- Create & join rooms with unique codes
-- Host approval system (Knock-Knock)
-- Recent rooms suggestions (top 5)
-- Favorite rooms tracking
-- Visit analytics
+## Local setup
 
-✅ **Real-Time Messaging**
-- End-to-end encrypted messages
-- File attachments (2MB limit)
-- Message history & search
-- System messages
+Use Node **22.12 or later**; the existing dependency range now resolves packages that require it. A lockfile is included. Dependency installation and Prisma generation do not require a database connection.
 
-✅ **Music & Playlists**
-- YouTube video integration
-- Collaborative playlists
-- Now playing sync
-- Playback history
-- Song search
-
-✅ **Enterprise Security**
-- Rate limiting (100 req/15min)
-- CORS protection
-- XSS prevention
-- SQL injection prevention
-- Comprehensive audit logging
-
-## Tech Stack
-
-- **Runtime:** Node.js 20+ LTS
-- **Framework:** Express.js
-- **Database:** MySQL 8.0+ with Prisma ORM
-- **Authentication:** JWT + Google OAuth
-- **Real-time:** PeerJS for WebRTC signaling
-- **Security:** Helmet, bcrypt, express-validator
-
-## Quick Start
-
-### Prerequisites
-
-- Node.js 20+ LTS
-- MySQL 8.0+
-- Google OAuth credentials
-
-### Installation
-
-```bash
-# Navigate to backend directory
+```sh
 cd backend
-
-# Install dependencies
-npm install
-
-# Copy environment template
+npm ci
+npm run prisma:generate
 cp .env.example .env
-
-# Generate secrets (run each command and copy to .env)
-node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"  # JWT_SECRET
-node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"  # JWT_REFRESH_SECRET
-node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"  # SESSION_SECRET
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"  # ENCRYPTION_KEY
-
-# Update .env with your values
-nano .env
 ```
 
-### Database Setup
+Set `.env` to a **separate local or staging PostgreSQL database**, and supply fresh local secrets. Do not copy the live Neon connection string. Environment files are ignored. The default example port is 3003, separate from the mobile test server's 3002.
 
-```bash
-# Create MySQL database
-mysql -u root -p
+For a brand-new, empty local database only:
 
-CREATE DATABASE our_space_production CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER 'ourspace_app'@'localhost' IDENTIFIED BY 'YOUR_PASSWORD';
-GRANT SELECT, INSERT, UPDATE, DELETE ON our_space_production.* TO 'ourspace_app'@'localhost';
-FLUSH PRIVILEGES;
-EXIT;
-
-# Run database schema
-mysql -u ourspace_app -p our_space_production < ../production-database-schema.sql
-
-# Generate Prisma client
-npx prisma generate
-
-# Optional: Push schema changes
+```sh
 npx prisma db push
-```
-
-### Start Server
-
-```bash
-# Development mode
-npm run dev
-
-# Production mode
+npx prisma db execute --file prisma/manual-migrations/001_personal_playlists.sql --schema prisma/schema.prisma
 npm start
 ```
 
-Server will start at:
-- **API:** http://localhost:3001
-- **PeerJS:** http://localhost:9000
-- **Health:** http://localhost:3001/health
+For an existing local/staging copy of the old database, apply **only** the SQL migration above, then regenerate Prisma. Do not use `db push` to substitute for the data migration: the SQL detaches old personal playlists while preserving playlist IDs, song entries, and owners. It also enforces the scope constraint, which Prisma's schema language does not represent.
 
-## Environment Variables
+The SQL is transactional and one-time. Invalid legacy playlist types cause a rollback for inspection; no rows are silently dropped. It deliberately does not live in a Prisma migration chain because the original project has no migration baseline. Establish a baseline against the actual deployed schema before adopting `prisma migrate deploy` later. Do not reattach personal playlists or restore NOT NULL as a casual rollback: newer personal playlists have no original room.
 
-See `.env.example` for all required variables.
+Production schema changes are explicit: deployment start commands do not run `prisma db push`. Apply the reviewed SQL migration separately after verifying the correct database and deployed backend.
 
-### Required Variables
+## API examples
 
-```env
-# Database
-DATABASE_URL="mysql://user:password@localhost:3306/our_space_production"
+All requests require the existing bearer access token. The authenticated user, not a submitted owner ID, determines personal ownership.
 
-# JWT Secrets (64+ characters each)
-JWT_SECRET=your_secret_here
-JWT_REFRESH_SECRET=your_secret_here
-SESSION_SECRET=your_secret_here
+Create personal:
 
-# Encryption (32 bytes = 64 hex chars)
-ENCRYPTION_KEY=your_key_here
-
-# Google OAuth
-GOOGLE_CLIENT_ID=your-id.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=your-secret
-
-# CORS Origins
-CORS_ORIGIN=http://localhost:3000,http://localhost:5500
+```json
+{"playlistName":"After hours","playlistType":"personal"}
 ```
 
-## API Endpoints
+Create room:
 
-### Authentication
-```
-POST   /api/auth/google          # Login with Google
-POST   /api/auth/refresh         # Refresh access token
-POST   /api/auth/logout          # Logout
-GET    /api/auth/verify          # Verify token
+```json
+{"playlistName":"Our late nights","playlistType":"room","roomId":7}
 ```
 
-### Rooms
-```
-POST   /api/rooms                # Create room
-POST   /api/rooms/join           # Join room
-POST   /api/rooms/:id/leave      # Leave room
-GET    /api/rooms/code/:code     # Get room by code
-GET    /api/rooms/:id            # Get room by ID
-GET    /api/rooms/user/suggested # Get suggested rooms
-POST   /api/rooms/:id/favorite   # Toggle favorite
-GET    /api/rooms/:id/pending-requests        # Get join requests (host)
-POST   /api/rooms/join-requests/:id/approve   # Approve/reject request
+Personal creation returns `roomId: null`. A legacy `roomId` supplied for a personal playlist is ignored by the service and stored as null. Mobile clients should omit it.
+
+Save a song with `POST /api/playlists/:playlistId/songs`:
+
+```json
+{"videoId":"abcdefghijk","title":"Fetched video title"}
 ```
 
-### Messages
-```
-POST   /api/messages/:roomId     # Send message
-GET    /api/messages/:roomId     # Get messages
-DELETE /api/messages/:id         # Delete message
-GET    /api/messages/:roomId/count    # Get message count
-GET    /api/messages/:roomId/search   # Search messages
-```
+The caller still supplies media metadata; this phase does not add server-side YouTube title lookup. Existing website callers sending duration/artist/thumbnail continue to work.
 
-### Playlists
-```
-POST   /api/playlists                         # Create playlist
-GET    /api/playlists/room/:roomId            # Get room playlists
-POST   /api/playlists/:id/songs               # Add song
-DELETE /api/playlists/songs/:id               # Remove song
-POST   /api/playlists/room/:roomId/now-playing    # Update now playing
-GET    /api/playlists/room/:roomId/now-playing    # Get now playing
-GET    /api/playlists/room/:roomId/history        # Get playback history
-PUT    /api/playlists/:id/reorder             # Reorder songs
+Reorder with `PUT /api/playlists/:playlistId/reorder`:
+
+```json
+{"songOrder":[{"playlistSongId":31,"newPosition":0},{"playlistSongId":30,"newPosition":1}]}
 ```
 
-### Users
-```
-GET    /api/users/me                 # Get profile
-PUT    /api/users/me/preferences     # Update preferences
-PUT    /api/users/me/profile         # Update profile
-GET    /api/users/me/sessions        # Get active sessions
-DELETE /api/users/me/sessions/:id    # Revoke session
-GET    /api/users/me/activity        # Get activity
-DELETE /api/users/me                 # Delete account
+Permission failures return 403, invalid order 400, duplicate saved songs 409. Existing successful response shapes are preserved apart from nullable personal room IDs and the separate personal library endpoint.
+
+## Validation
+
+```sh
+npm test
+npm run prisma:validate
 ```
 
-## Project Structure
+Tests cover owner isolation, membership, room-independent creation, room-only reads, invalid/foreign reorder items, conflict retries, logout middleware, ID normalization, and route serialization. Embedded PostgreSQL tests run the migration against isolated fixtures, test cascading room deletion, and verify rollback for invalid legacy records. They do not connect to Neon. Service tests use an injected Prisma client; full live login, real Prisma/database integration, and multi-device calls remain for the integration phase.
 
-```
-backend/
-├── middleware/
-│   ├── auth.js           # JWT authentication
-│   ├── security.js       # Security headers, rate limiting
-│   └── validation.js     # Input validation
-├── routes/
-│   ├── auth.js           # Auth endpoints
-│   ├── rooms.js          # Room endpoints
-│   ├── messages.js       # Message endpoints
-│   ├── playlists.js      # Playlist endpoints
-│   └── users.js          # User endpoints
-├── services/
-│   ├── roomService.js    # Room business logic
-│   ├── messageService.js # Message business logic
-│   ├── playlistService.js# Playlist business logic
-│   └── userService.js    # User business logic
-├── utils/
-│   ├── encryption.js     # AES-256-GCM encryption
-│   └── auditLogger.js    # Audit logging
-├── prisma/
-│   └── schema.prisma     # Database schema
-├── server.js             # Main server file
-├── package.json          # Dependencies
-└── .env.example          # Environment template
-```
+## Mobile integration and responsiveness
 
-## Security Features
+See `DEPLOYMENT.md` for deployment and OAuth configuration. `/api/mobile` exposes the app's room, playlist, playback, and call contracts using authenticated PostgreSQL-backed users. Native tokens use SecureStore and refresh automatically. PeerJS remains for the website; native-to-native calls use the existing WebRTC media implementation with a room-scoped signaling queue and TURN credentials.
 
-### Authentication
-- Google OAuth 2.0 verification
-- JWT with short expiry (24h)
-- Refresh token rotation (7d)
-- Session tracking (IP, user agent)
-- Failed login attempt tracking
-- Account lockout (5 attempts = 15min)
+Room and call requests support `wait=1&cursor=...`. Matching cursors keep the request open until a change or heartbeat. Updates wake waiting clients immediately, replacing fixed 900/1200 ms client timers. Call heartbeats are 15 seconds; room heartbeats are 10 seconds. Clients cancel waits when leaving, back off on errors, and avoid rendering identical snapshots. Legacy website writes are observed on the room heartbeat rather than the mobile notification path; native/website call signaling is not interoperable yet.
 
-### Encryption
-- AES-256-GCM for messages
-- Unique IV per message
-- Authentication tags for integrity
-- PBKDF2 key derivation (100k iterations)
-
-### API Security
-- Helmet.js security headers
-- CORS whitelist
-- Rate limiting (100/15min)
-- Request size limits (2MB)
-- HTTP Parameter Pollution prevention
-- Input sanitization
-- SQL injection prevention
-
-### Monitoring
-- Comprehensive audit logs
-- Failed login tracking
-- Suspicious activity detection
-- Security event logging
-
-## Development
-
-### Database Management
-
-```bash
-# Open Prisma Studio
-npx prisma studio
-
-# Generate Prisma client after schema changes
-npx prisma generate
-
-# Push schema to database
-npx prisma db push
-
-# Create migration
-npx prisma migrate dev --name migration_name
-```
-
-### Testing
-
-```bash
-# Test health endpoint
-curl http://localhost:3001/health
-
-# Test authentication (requires valid Google token)
-curl -X POST http://localhost:3001/api/auth/google \
-  -H "Content-Type: application/json" \
-  -d '{"credential":"YOUR_GOOGLE_TOKEN"}'
-
-# Test protected endpoint (requires access token)
-curl http://localhost:3001/api/users/me \
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
-```
-
-### Common Tasks
-
-```bash
-# View logs in development
-npm run dev
-
-# Check Prisma schema
-npx prisma validate
-
-# Format Prisma schema
-npx prisma format
-
-# Seed database (if seeder exists)
-npx prisma db seed
-```
-
-## Deployment
-
-See `../PRODUCTION_DEPLOYMENT_GUIDE.md` for complete production deployment instructions.
-
-### Quick Deploy Checklist
-
-```bash
-# 1. Set up server (Ubuntu 22.04 recommended)
-# 2. Install Node.js 20, MySQL 8.0, Nginx
-# 3. Clone repository
-# 4. Install dependencies
-npm install --production
-
-# 5. Set up environment variables
-cp .env.example .env.production
-# Edit .env.production with production values
-
-# 6. Set up database
-mysql -u root -p < ../production-database-schema.sql
-
-# 7. Generate Prisma client
-npx prisma generate
-
-# 8. Start with PM2
-npm install -g pm2
-pm2 start server.js --name our-space-api
-pm2 save
-pm2 startup
-
-# 9. Configure Nginx as reverse proxy
-# 10. Set up SSL with Let's Encrypt
-# 11. Configure firewall
-```
-
-## Troubleshooting
-
-### Database Connection Issues
-```bash
-# Test MySQL connection
-mysql -u ourspace_app -p our_space_production -e "SELECT 1"
-
-# Check DATABASE_URL format
-DATABASE_URL="mysql://user:pass@host:3306/database"
-```
-
-### JWT Token Issues
-```bash
-# Ensure JWT_SECRET is set and long enough
-echo $JWT_SECRET  # Should be 64+ characters
-
-# Clear all sessions in database
-mysql -u ourspace_app -p our_space_production
-DELETE FROM user_sessions;
-```
-
-### Prisma Issues
-```bash
-# Regenerate Prisma client
-npx prisma generate --force
-
-# Reset database (WARNING: deletes all data)
-npx prisma migrate reset
-```
-
-### Port Already in Use
-```bash
-# Find process using port 3001
-lsof -i :3001
-
-# Kill process
-kill -9 PID
-```
-
-## Performance
-
-### Expected Response Times (with indexes)
-- User login: < 50ms
-- Room join: < 100ms
-- Message send: < 30ms
-- Message history (100 msgs): < 200ms
-- Playlist load: < 150ms
-
-### Optimization Tips
-- Use database indexes (already configured in schema)
-- Enable PM2 clustering (2-4 instances)
-- Add Redis for session storage (for scaling)
-- Use CDN for static assets
-- Enable database query caching
-
-## Support
-
-For issues or questions:
-1. Check logs: `pm2 logs our-space-api` or `npm run dev` output
-2. Review `.env` configuration
-3. Verify database connection
-4. Check Google OAuth credentials
-5. Review audit logs in database
-
-## License
-
-ISC
+Signaling and change notifications are ephemeral and require a **single backend instance**. Persistent accounts, messages, memberships, playlists and playback remain in PostgreSQL. Server restart may require retrying a call. A shared event broker is needed before scaling to multiple replicas. This change does not claim the entire inherited backend is production-audited.

@@ -1,5 +1,9 @@
 const express = require('express');
 const router = express.Router();
+const { validateIdParams } = require('../utils/ids');
+for (const key of ['roomId', 'requestId']) {
+  router.param(key, (req, res, next) => validateIdParams(req, res, next));
+}
 const {
   createRoom,
   getRoomByCode,
@@ -28,8 +32,6 @@ const { logRoomEvent } = require('../utils/auditLogger');
  */
 router.post('/', authenticate, roomCreationLimiter, validateRoomCreation, async (req, res) => {
   try {
-    console.log('[DEBUG] Create room request body:', req.body);
-    console.log('[DEBUG] User:', req.user);
     const userId = parseInt(req.user.user_id);
     const room = await createRoom(userId, req.body);
 
@@ -140,7 +142,7 @@ router.post('/join', authenticate, validateRoomJoin, async (req, res) => {
  */
 router.post('/:roomId/leave', authenticate, validateRoomVisit, async (req, res) => {
   try {
-    const { roomId } = req.params;
+    const roomId = Number(req.params.roomId);
     const { timeSpentSeconds } = req.body;
 
     const result = await leaveRoom(parseInt(req.user.user_id), roomId, timeSpentSeconds);
@@ -228,7 +230,7 @@ router.get('/code/:roomCode', authenticate, async (req, res) => {
  */
 router.get('/:roomId', authenticate, async (req, res) => {
   try {
-    const { roomId } = req.params;
+    const roomId = Number(req.params.roomId);
     const room = await getRoomById(roomId);
 
     if (!room) {
@@ -282,7 +284,7 @@ router.get('/:roomId', authenticate, async (req, res) => {
  */
 router.get('/:roomId/pending-requests', authenticate, isRoomHost, async (req, res) => {
   try {
-    const { roomId } = req.params;
+    const roomId = Number(req.params.roomId);
     const requests = await getPendingRequests(roomId, parseInt(req.user.user_id));
 
     res.json({
@@ -386,7 +388,7 @@ router.get('/user/suggested', authenticate, async (req, res) => {
  */
 router.post('/:roomId/favorite', authenticate, validateFavoriteToggle, async (req, res) => {
   try {
-    const { roomId } = req.params;
+    const roomId = Number(req.params.roomId);
     const { isFavorite } = req.body;
 
     const result = await toggleFavorite(parseInt(req.user.user_id), roomId, isFavorite);
