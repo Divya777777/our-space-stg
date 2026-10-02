@@ -72,6 +72,9 @@ app.use('/api', apiLimiter);
 // ====================
 
 // Health check endpoint
+// Public invite links (https://<backend>/j/CODE) that open the mobile app.
+app.use(require('./routes/invite').createInviteRouter());
+
 app.get('/health', async (req, res) => {
   try {
     // Check database connection

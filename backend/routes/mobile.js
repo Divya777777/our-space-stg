@@ -7,8 +7,9 @@ const rooms = require('../services/roomService');
 const lists = require('../services/playlistService');
 const messages = require('../services/messageService');
 const { positiveId } = require('../utils/ids');
+const { createYouTubeSearch } = require('../services/youtubeSearch');
 
-function createMobileRouter({ db = new PrismaClient(), roomService = rooms, playlistService = lists, messageService = messages, auth = authenticate } = {}) {
+function createMobileRouter({ db = new PrismaClient(), roomService = rooms, playlistService = lists, messageService = messages, auth = authenticate, youtube = createYouTubeSearch() } = {}) {
   const router = express.Router();
   const feed = new ChangeFeed();
   const changed = code => feed.notify('room:' + code);
@@ -22,7 +23,7 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     if (!error.status) console.error('Mobile API:', error.message);
     res.status(error.status || 500).json({ error: error.status ? error.message : 'Unable to complete request' });
   } };
-  router.get('/capabilities', (req, res) => res.json({ service: 'our-space-mobile-api', version: 2, features: ['call-inbox', 'signal-replay', 'join-status'] }));
+  router.get('/capabilities', (req, res) => res.json({ service: 'our-space-mobile-api', version: 2, features: ['call-inbox', 'signal-replay', 'join-status', ...(youtube.configured() ? ['youtube-search'] : [])] }));
   router.use(auth);
   router.use(rateLimit({ windowMs: 60000, max: 240, keyGenerator: req => String(req.user.user_id), standardHeaders: true, legacyHeaders: false }));
   async function roomFor(code, userId) {
@@ -126,6 +127,13 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     check(await playlistService.updateNowPlaying(room.room_id, req.user.user_id, { videoId: req.body.videoId, isPlaying: req.body.playing, currentTimeSeconds: req.body.position }));
     changed(room.room_code);
     res.json(await roomView(room, req.user.user_id));
+  }));
+  // Each search spends YouTube quota; keep a tighter per-user budget than ordinary reads.
+  const searchLimit = rateLimit({ windowMs: 60000, max: 20, keyGenerator: req => String(req.user.user_id), standardHeaders: true, legacyHeaders: false, message: { error: 'Searching a little too fast. Give it a few seconds.' } });
+  router.get('/youtube/search', searchLimit, route(async (req, res) => {
+    const results = await youtube.search(req.query.q, { region: typeof req.query.region === 'string' ? req.query.region.toUpperCase() : undefined });
+    res.set('Cache-Control', 'private, max-age=300');
+    res.json({ results });
   }));
   router.get('/playlists', route(async (req, res) => {
     const data = await db.playlists.findMany({ where: { is_active: true, OR: [
