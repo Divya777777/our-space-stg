@@ -8,8 +8,9 @@ const lists = require('../services/playlistService');
 const messages = require('../services/messageService');
 const { positiveId } = require('../utils/ids');
 const { createYouTubeSearch } = require('../services/youtubeSearch');
+const { createRoomQueues } = require('../utils/roomQueue');
 
-function createMobileRouter({ db = new PrismaClient(), roomService = rooms, playlistService = lists, messageService = messages, auth = authenticate, youtube = createYouTubeSearch() } = {}) {
+function createMobileRouter({ db = new PrismaClient(), roomService = rooms, playlistService = lists, messageService = messages, auth = authenticate, youtube = createYouTubeSearch(), queues = createRoomQueues() } = {}) {
   const router = express.Router();
   const feed = new ChangeFeed();
   const changed = code => feed.notify('room:' + code);
@@ -23,7 +24,7 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     if (!error.status) console.error('Mobile API:', error.message);
     res.status(error.status || 500).json({ error: error.status ? error.message : 'Unable to complete request' });
   } };
-  router.get('/capabilities', (req, res) => res.json({ service: 'our-space-mobile-api', version: 2, features: ['call-inbox', 'signal-replay', 'join-status', ...(youtube.configured() ? ['youtube-search'] : [])] }));
+  router.get('/capabilities', (req, res) => res.json({ service: 'our-space-mobile-api', version: 2, features: ['call-inbox', 'signal-replay', 'join-status', 'room-queue', ...(youtube.configured() ? ['youtube-search'] : [])] }));
   router.use(auth);
   router.use(rateLimit({ windowMs: 60000, max: 240, keyGenerator: req => String(req.user.user_id), standardHeaders: true, legacyHeaders: false }));
   async function roomFor(code, userId) {
@@ -42,7 +43,7 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
       room.host_user_id === userId ? roomService.getPendingRequests(room.room_id, userId) : []
     ]);
     return { updateCursor, playlistVersion, code: room.room_code, name: room.room_name || 'Our space', hostId: String(room.host_user_id),
-      members: room.members.map(m => person(m.user)), requests: pending.map(r => person(r.user)),
+      members: room.members.map(m => person(m.user)), requests: pending.map(r => person(r.user)), queue: queues.view(room.room_id),
       messages: history.filter(m => m.sender).map(m => ({ id: m.messageId, userId: m.sender.userId, name: m.sender.displayName, text: m.content, at: new Date(m.sentAt).getTime() })),
       playback: playing ? { videoId: playing.videoId, playing: playing.isPlaying, position: playing.currentTimeSeconds || 0,
         updatedAt: new Date(playing.startedAt).getTime(), revision: Number(playing.nowPlayingId), updatedBy: '' } : null };
@@ -124,7 +125,13 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     const room = await roomFor(req.params.code, req.user.user_id);
     if (!/^[\w-]{11}$/.test(req.body.videoId || '') || typeof req.body.playing !== 'boolean' || !Number.isFinite(req.body.position) || req.body.position < 0) fail('Invalid playback');
     await activate(room, req.user.user_id);
+    const before = await playlistService.getNowPlaying(room.room_id);
     check(await playlistService.updateNowPlaying(room.room_id, req.user.user_id, { videoId: req.body.videoId, isPlaying: req.body.playing, currentTimeSeconds: req.body.position }));
+    if (before?.videoId !== req.body.videoId) {
+      // A new video: continue through its playlist if one was given, otherwise drop the old continuation.
+      queues.setContext(room.room_id, Array.isArray(req.body.queueContext) ? req.body.queueContext : []);
+      queues.removeVideo(room.room_id, req.body.videoId);
+    }
     changed(room.room_code);
     res.json(await roomView(room, req.user.user_id));
   }));
@@ -134,6 +141,30 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     const results = await youtube.search(req.query.q, { region: typeof req.query.region === 'string' ? req.query.region.toUpperCase() : undefined });
     res.set('Cache-Control', 'private, max-age=300');
     res.json({ results });
+  }));
+  const recentNext = new Map();
+  router.post('/rooms/:code/queue', route(async (req, res) => {
+    const room = await roomFor(req.params.code, req.user.user_id);
+    const { action } = req.body;
+    if (action === 'add') queues.add(room.room_id, { videoId: req.body.videoId, title: req.body.title }, String(req.user.user_id));
+    else if (action === 'remove') { if (typeof req.body.id !== 'string') fail('Invalid queue item'); queues.remove(room.room_id, req.body.id); }
+    else if (action === 'clear') queues.clear(room.room_id);
+    else if (action === 'next') {
+      // Every member's player reports the end of a video; only the first report for that video advances.
+      const from = req.body.from;
+      if (!/^[\w-]{11}$/.test(from || '')) fail('Invalid video');
+      const last = recentNext.get(room.room_id);
+      if (!(last && last.from === from && Date.now() - last.at < 30000)) {
+        recentNext.set(room.room_id, { from, at: Date.now() });
+        const current = await playlistService.getNowPlaying(room.room_id);
+        if (current?.videoId === from) {
+          const next = queues.shift(room.room_id);
+          if (next) check(await playlistService.updateNowPlaying(room.room_id, req.user.user_id, { videoId: next.videoId, isPlaying: true, currentTimeSeconds: 0 }));
+        }
+      }
+    } else fail('Unknown queue action');
+    changed(room.room_code);
+    res.json(await roomView(room, req.user.user_id));
   }));
   router.get('/playlists', route(async (req, res) => {
     const data = await db.playlists.findMany({ where: { is_active: true, OR: [
