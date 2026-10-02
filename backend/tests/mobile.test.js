@@ -9,7 +9,7 @@ function fixture() {
   let query; const writes = [];
   const db = { rooms: { findUnique: async () => room, findMany: async q => room.members.some(member => member.user_id === q.where.members.some.user_id) ? [room] : [] }, room_members: { updateMany: async () => ({ count: 1 }) },
     pending_join_requests: { findFirst: async () => null },
-    playlists: { findUnique: async () => personal, findMany: async q => { query=q; return [personal]; } } };
+    playlists: { findUnique: async () => personal, findMany: async q => { query=q; return [personal]; }, count: async () => 0 } };
   const auth = () => {};
   const router = createMobileRouter({ db, auth,
     roomService: { getPendingRequests: async () => [] },

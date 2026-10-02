@@ -9,8 +9,9 @@ const messages = require('../services/messageService');
 const { positiveId } = require('../utils/ids');
 const { createYouTubeSearch } = require('../services/youtubeSearch');
 const { createRoomQueues } = require('../utils/roomQueue');
+const plans = require('../utils/plans');
 
-function createMobileRouter({ db = new PrismaClient(), roomService = rooms, playlistService = lists, messageService = messages, auth = authenticate, youtube = createYouTubeSearch(), queues = createRoomQueues() } = {}) {
+function createMobileRouter({ db = new PrismaClient(), roomService = rooms, playlistService = lists, messageService = messages, auth = authenticate, youtube = createYouTubeSearch(), queues = createRoomQueues(), env = process.env } = {}) {
   const router = express.Router();
   const feed = new ChangeFeed();
   const changed = code => feed.notify('room:' + code);
@@ -22,9 +23,9 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
   const id = value => positiveId(value) || fail('Invalid ID');
   const route = handler => async (req, res) => { try { await handler(req, res); } catch (error) {
     if (!error.status) console.error('Mobile API:', error.message);
-    res.status(error.status || 500).json({ error: error.status ? error.message : 'Unable to complete request' });
+    res.status(error.status || 500).json({ error: error.status ? error.message : 'Unable to complete request', ...(error.code ? { code: error.code, limit: error.limit } : {}) });
   } };
-  router.get('/capabilities', (req, res) => res.json({ service: 'our-space-mobile-api', version: 2, features: ['call-inbox', 'signal-replay', 'join-status', 'room-queue', ...(youtube.configured() ? ['youtube-search'] : [])] }));
+  router.get('/capabilities', (req, res) => res.json({ service: 'our-space-mobile-api', version: 2, features: ['call-inbox', 'signal-replay', 'join-status', 'room-queue', 'plans', 'delete', ...(youtube.configured() ? ['youtube-search'] : [])] }));
   router.use(auth);
   router.use(rateLimit({ windowMs: 60000, max: 240, keyGenerator: req => String(req.user.user_id), standardHeaders: true, legacyHeaders: false }));
   async function roomFor(code, userId) {
@@ -66,9 +67,33 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     const data = await db.rooms.findMany({ where: { is_active: true, members: { some: { user_id: req.user.user_id } } }, include: { members: { include: { user: true } } }, orderBy: { created_at: 'desc' } });
     res.json(await Promise.all(data.map(room => roomView(room, req.user.user_id))));
   }));
+  router.get('/plan', route(async (req, res) => {
+    const userId = req.user.user_id;
+    const [rooms, personalPlaylists] = await Promise.all([
+      db.rooms.count({ where: { host_user_id: userId, is_active: true } }),
+      db.playlists.count({ where: { created_by_user_id: userId, playlist_type: 'personal', is_active: true } }),
+    ]);
+    res.json({ plan: plans.isPlus(userId, env) ? 'plus' : 'free', limits: plans.limitsFor(userId, env), usage: { rooms, personalPlaylists } });
+  }));
   router.post('/rooms', route(async (req, res) => {
+    const limits = plans.limitsFor(req.user.user_id, env);
+    if (limits && await db.rooms.count({ where: { host_user_id: req.user.user_id, is_active: true } }) >= limits.rooms) throw plans.plusRequired('rooms');
     const room = await roomService.createRoom(req.user.user_id, { roomName: string(req.body.name), requiresApproval: true });
     res.status(201).json(await roomView(await roomFor(room.room_code, req.user.user_id), req.user.user_id));
+  }));
+  // The admin deletes the room for everyone; a member who is not the admin leaves it instead.
+  router.delete('/rooms/:code', route(async (req, res) => {
+    const room = await roomFor(req.params.code, req.user.user_id);
+    if (room.host_user_id === req.user.user_id) {
+      await db.rooms.update({ where: { room_id: room.room_id }, data: { is_active: false, closed_at: new Date() } });
+      queues.clear(room.room_id);
+      changed(room.room_code);
+      res.json({ deleted: true });
+    } else {
+      await db.room_members.deleteMany({ where: { room_id: room.room_id, user_id: req.user.user_id } });
+      changed(room.room_code);
+      res.json({ left: true });
+    }
   }));
   router.post('/rooms/:code/join', route(async (req, res) => {
     const result = check(await roomService.joinRoom(req.user.user_id, req.params.code)); changed(req.params.code); res.json({ approved: !!result.joined });
@@ -177,9 +202,20 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     if (!['personal','room'].includes(req.body.scope)) fail('Invalid playlist scope');
     let room = null;
     if (req.body.scope === 'room') { room = await roomFor(req.body.roomCode || '', req.user.user_id); await activate(room, req.user.user_id); }
+    const limits = plans.limitsFor(req.user.user_id, env);
+    if (limits && room && await db.playlists.count({ where: { room_id: room.room_id, playlist_type: 'room', is_active: true } }) >= limits.roomPlaylistsPerRoom) throw plans.plusRequired('roomPlaylistsPerRoom');
+    if (limits && !room && await db.playlists.count({ where: { created_by_user_id: req.user.user_id, playlist_type: 'personal', is_active: true } }) >= limits.personalPlaylists) throw plans.plusRequired('personalPlaylists');
     const result = check(await playlistService.createPlaylist(req.user.user_id, { playlistName: string(req.body.name), playlistType: req.body.scope, roomId: room?.room_id }));
     playlistsChanged(room?.room_code);
     res.status(201).json(playlistView(await playlistFor(result.playlist.playlist_id, req.user.user_id), room?.room_code));
+  }));
+  // Personal playlists: owner only. Room playlists: whoever made it, or the room admin.
+  router.delete('/playlists/:id', route(async (req, res) => {
+    const p = await playlistFor(req.params.id, req.user.user_id);
+    if (p.playlist_type === 'room' && p.created_by_user_id !== req.user.user_id && p.room?.host_user_id !== req.user.user_id) fail('Only the room admin or the person who made this playlist can delete it', 403);
+    await db.playlists.update({ where: { playlist_id: p.playlist_id }, data: { is_active: false } });
+    playlistsChanged(p.room?.room_code);
+    res.json({ success: true });
   }));
   router.post('/playlists/:id/tracks', route(async (req, res) => {
     const p = await playlistFor(req.params.id, req.user.user_id);
