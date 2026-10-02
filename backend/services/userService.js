@@ -14,15 +14,18 @@ async function authenticateWithGoogle(credential, ipAddress, userAgent) {
     const ticket = await googleClient.verifyIdToken({
       idToken: credential,
       audience: process.env.GOOGLE_CLIENT_ID
+    }).catch(error => {
+      const unavailable = ['ENOTFOUND', 'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED'].includes(error.code) || error.response?.status >= 500;
+      throw Object.assign(new Error(unavailable ? 'Google sign-in temporarily unavailable' : 'Google identity could not be verified'), { status: unavailable ? 503 : 401 });
     });
 
     const payload = ticket.getPayload();
     const { sub: googleId, email, name, picture } = payload;
 
-    if (!googleId || !email || payload.email_verified !== true) throw new Error('Verified Google account required');
+    if (!googleId || !email || payload.email_verified !== true) throw Object.assign(new Error('Verified Google account required'), { status: 401 });
     let user = await prisma.users.findUnique({ where: { google_id: googleId } });
     if (user?.deleted_at || (user?.account_locked && (!user.locked_until || new Date(user.locked_until) > new Date()))) {
-      throw new Error('Account is unavailable');
+      throw Object.assign(new Error('Account is unavailable'), { status: 403 });
     }
     // Unique provider identity and nested creation prevent partial signup records.
     user = await prisma.users.upsert({
@@ -73,8 +76,8 @@ async function authenticateWithGoogle(credential, ipAddress, userAgent) {
       expiresAt: accessExpiresAt
     };
   } catch (error) {
-    console.error('Google auth error:', error);
-    throw new Error('Authentication failed');
+    console.error('Google auth error:', error.message);
+    throw Object.assign(new Error(error.status ? error.message : 'Sign-in temporarily unavailable'), { status: error.status || 503 });
   }
 }
 

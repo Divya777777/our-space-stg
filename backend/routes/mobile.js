@@ -22,7 +22,7 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     if (!error.status) console.error('Mobile API:', error.message);
     res.status(error.status || 500).json({ error: error.status ? error.message : 'Unable to complete request' });
   } };
-  router.get('/capabilities', (req, res) => res.json({ service: 'our-space-mobile-api', version: 1 }));
+  router.get('/capabilities', (req, res) => res.json({ service: 'our-space-mobile-api', version: 2, features: ['call-inbox', 'signal-replay', 'join-status'] }));
   router.use(auth);
   router.use(rateLimit({ windowMs: 60000, max: 240, keyGenerator: req => String(req.user.user_id), standardHeaders: true, legacyHeaders: false }));
   async function roomFor(code, userId) {
@@ -71,6 +71,24 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
   router.post('/rooms/:code/join', route(async (req, res) => {
     const result = check(await roomService.joinRoom(req.user.user_id, req.params.code)); changed(req.params.code); res.json({ approved: !!result.joined });
   }));
+  router.get('/rooms/:code/join-status', route(async (req, res) => {
+    if (!/^[A-Z0-9]{6,10}$/.test(req.params.code)) fail('Invalid room code');
+    const read = async () => {
+      const room = await db.rooms.findUnique({ where: { room_code: req.params.code }, include: { members: true } });
+      if (!room?.is_active) fail('Room not found', 404);
+      if (room.members.some(member => member.user_id === req.user.user_id)) return 'approved';
+      const request = await db.pending_join_requests.findFirst({ where: { room_id: room.room_id, user_id: req.user.user_id }, orderBy: { requested_at: 'desc' } });
+      if (!request) fail('Request not found', 404);
+      return request.status === 'pending' && request.expires_at > new Date() ? 'waiting' : 'declined';
+    };
+    let status = await read();
+    if (status === 'waiting') {
+      await feed.wait('room:' + req.params.code, req.query.cursor, res, 10000);
+      if (res.destroyed) return;
+      status = await read();
+    }
+    res.json({ status, cursor: feed.version('room:' + req.params.code) });
+  }));
   router.get('/rooms/:code', route(async (req, res) => {
     let room = await roomFor(req.params.code, req.user.user_id);
     if (req.query.wait === '1') {
@@ -85,7 +103,12 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     if (room.host_user_id !== req.user.user_id) fail('Only the admin can approve requests', 403);
     if (typeof req.body.approved !== 'boolean') fail('Approval must be a boolean');
     const pending = await db.pending_join_requests.findFirst({ where: { room_id: room.room_id, user_id: id(req.body.userId), status: 'pending', expires_at: { gt: new Date() } } });
-    if (!pending) fail('Request expired or already handled', 404);
+    if (!pending) {
+      if (req.body.approved && room.members.some(member => member.user_id === id(req.body.userId))) {
+        res.json(await roomView(room, req.user.user_id)); return;
+      }
+      fail('Request expired or already handled', 404);
+    }
     check(await roomService.handleJoinRequest(pending.request_id, req.body.approved, req.user.user_id));
     changed(room.room_code);
     res.json(await roomView(await roomFor(req.params.code, req.user.user_id), req.user.user_id));
@@ -143,6 +166,24 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     signals = signals.filter(s => s.at > cutoff);
     for (const [key, p] of presence) if (p.at < cutoff) presence.delete(key);
   }
+  // One authenticated inbox keeps incoming calls available across all foreground screens.
+  router.get('/calls', route(async (req, res) => {
+    const after = Number(req.query.after || 0);
+    if (!Number.isSafeInteger(after) || after < 0) fail('Invalid signal cursor');
+    prune();
+    const channel = 'inbox:' + req.user.user_id;
+    if (!signals.some(s => s.to === req.user.user_id && s.id > after)) {
+      await feed.wait(channel, req.query.cursor, res, 12000);
+      if (res.destroyed) return;
+    }
+    const memberships = await db.rooms.findMany({ where: { is_active: true, members: { some: { user_id: req.user.user_id } } }, include: { members: true } });
+    prune();
+    const received = signals.filter(s => s.to === req.user.user_id && s.id > after).flatMap(signal => {
+      const room = memberships.find(room => room.room_id === signal.room && room.members.some(member => String(member.user_id) === signal.from));
+      return room ? [{ id: signal.id, from: signal.from, name: signal.name, type: signal.type, payload: signal.payload, code: room.room_code, sentAt: signal.at }] : [];
+    });
+    res.json({ cursor: feed.version(channel), signals: received });
+  }));
   router.get('/rooms/:code/call', route(async (req, res) => {
     let room = await roomFor(req.params.code, req.user.user_id); prune();
     const after = Number(req.query.after || 0); if (!Number.isSafeInteger(after) || after < 0) fail('Invalid signal cursor');
@@ -167,9 +208,13 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     const to = id(req.body.to);
     if (to === req.user.user_id || !room.members.some(m => m.user_id === to)) fail('Recipient is not in this room', 403);
     if (!['invite','accept','reject','offer','answer','candidate','end'].includes(req.body.type) || !req.body.payload || typeof req.body.payload !== 'object' || Array.isArray(req.body.payload) || JSON.stringify(req.body.payload).length > 65536) fail('Invalid call signal');
+    const requestId = req.body.requestId;
+    if (requestId !== undefined && (typeof requestId !== 'string' || !/^[\w-]{8,100}$/.test(requestId))) fail('Invalid request ID');
+    if (requestId && signals.some(s => s.from === String(req.user.user_id) && s.requestId === requestId)) { res.json({ success: true }); return; }
     if (signals.length >= 10000) fail('Call service busy; retry shortly', 503);
-    signals.push({ id: ++sequence, at: Date.now(), room: room.room_id, to, from: String(req.user.user_id), name: req.user.display_name, type: req.body.type, payload: req.body.payload });
+    signals.push({ requestId, id: ++sequence, at: Date.now(), room: room.room_id, to, from: String(req.user.user_id), name: req.user.display_name, type: req.body.type, payload: req.body.payload });
     feed.notify('call:' + room.room_id);
+    feed.notify('inbox:' + to);
     res.json({ success: true });
   }));
   return router;

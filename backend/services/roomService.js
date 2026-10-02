@@ -322,71 +322,29 @@ async function leaveRoom(userId, roomId, timeSpentSeconds = 0) {
  * Approve or reject join request
  */
 async function handleJoinRequest(requestId, approved, hostUserId) {
-  try {
-    const request = await prisma.pending_join_requests.findUnique({
-      where: { request_id: requestId },
-      include: {
-        room: true
-      }
+  // Request status and membership must commit together: never leave an approved
+  // request without a member when the database connection drops between writes.
+  const result = await prisma.$transaction(async tx => {
+    const request = await tx.pending_join_requests.findUnique({ where: { request_id: requestId }, include: { room: true } });
+    if (!request) return { success: false, error: 'Request not found', status: 404 };
+    if (request.room.host_user_id !== hostUserId) return { success: false, error: 'Only room host can approve requests', status: 403 };
+    if (request.status !== 'pending') return { success: request.status === (approved ? 'approved' : 'rejected'), approved, error: 'Request already processed' };
+    if (request.expires_at <= new Date()) return { success: false, error: 'Request expired', status: 404 };
+    const changed = await tx.pending_join_requests.updateMany({
+      where: { request_id: requestId, status: 'pending' },
+      data: { status: approved ? 'approved' : 'rejected', responded_at: new Date() }
     });
-
-    if (!request) {
-      return { success: false, error: 'Request not found' };
-    }
-
-    if (request.room.host_user_id !== hostUserId) {
-      return { success: false, error: 'Only room host can approve requests' };
-    }
-
-    if (request.status !== 'pending') {
-      return { success: false, error: 'Request already processed' };
-    }
-
-    // Update request status
-    await prisma.pending_join_requests.update({
-      where: { request_id: request.request_id },
-      data: {
-        status: approved ? 'approved' : 'rejected',
-        responded_at: new Date()
-      }
+    if (changed.count !== 1) return { success: false, error: 'Request already processed', status: 409 };
+    if (approved) await tx.room_members.upsert({
+      where: { room_id_user_id: { room_id: request.room_id, user_id: request.user_id } },
+      create: { room_id: request.room_id, user_id: request.user_id, role: 'member', is_online: true },
+      update: { is_online: true, left_at: null }
     });
-
-    // If approved, add as member or update existing membership
-    if (approved) {
-      const existingMember = await prisma.room_members.findFirst({
-        where: {
-          room_id: request.room_id,
-          user_id: request.user_id
-        }
-      });
-
-      if (existingMember) {
-        await prisma.room_members.update({
-          where: { member_id: existingMember.member_id },
-          data: {
-            is_online: true,
-            left_at: null
-          }
-        });
-      } else {
-        await prisma.room_members.create({
-          data: {
-            room_id: request.room_id,
-            user_id: request.user_id,
-            role: 'member',
-            is_online: true
-          }
-        });
-      }
-
-      await recordVisit(Number(request.user_id), Number(request.room_id));
-    }
-
-    return { success: true, approved };
-  } catch (error) {
-    console.error('Handle join request error:', error);
-    throw new Error('Failed to process join request');
-  }
+    return { success: true, approved, roomId: request.room_id, userId: request.user_id };
+  });
+  // Visit history is not on the critical approval response path.
+  if (result.success && approved && result.roomId) void recordVisit(Number(result.userId), Number(result.roomId)).catch(error => console.error('Record approved visit:', error.message));
+  return { success: result.success, approved: result.approved, ...(result.error ? { error: result.error } : {}), ...(result.status ? { status: result.status } : {}) };
 }
 
 /**

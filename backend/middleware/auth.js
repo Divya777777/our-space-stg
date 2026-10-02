@@ -40,7 +40,7 @@ function verifyToken(token, isRefreshToken = false) {
     const secret = isRefreshToken ? process.env.JWT_REFRESH_SECRET : process.env.JWT_SECRET;
     return jwt.verify(token, secret);
   } catch (error) {
-    throw new Error('Invalid or expired token');
+    throw Object.assign(new Error('Invalid or expired token'), { status: 401 });
   }
 }
 
@@ -123,18 +123,11 @@ async function authenticate(req, res, next) {
 
     next();
   } catch (error) {
-    console.error('Authentication error:', error);
-
-    // Log security event
-    await logSecurityEvent(
-      null,
-      'invalid_token',
-      getClientIp(req),
-      getUserAgent(req),
-      { error: error.message }
-    );
-
-    return res.status(401).json({ error: 'Authentication failed' });
+    // Database/network outages must not masquerade as expired credentials.
+    const status = error.status || 503;
+    console.error('Authentication error:', error.message);
+    if (status === 401) void logSecurityEvent(null, 'invalid_token', getClientIp(req), getUserAgent(req), { error: error.message }).catch(() => {});
+    return res.status(status).json({ error: status === 401 ? 'Authentication failed' : 'Account service temporarily unavailable' });
   }
 }
 
@@ -272,7 +265,7 @@ async function refreshAccessToken(refreshToken) {
     });
 
     if (!session || session.user.deleted_at || (session.user.account_locked && (!session.user.locked_until || new Date(session.user.locked_until) > new Date()))) {
-      throw new Error('Invalid or expired refresh token');
+      throw Object.assign(new Error('Invalid or expired refresh token'), { status: 401 });
     }
 
     // Generate new access token
@@ -298,7 +291,7 @@ async function refreshAccessToken(refreshToken) {
       expiresAt
     };
   } catch (error) {
-    throw new Error('Failed to refresh token');
+    throw Object.assign(new Error('Failed to refresh token'), { status: error.status || 503 });
   }
 }
 

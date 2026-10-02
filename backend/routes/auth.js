@@ -1,4 +1,7 @@
 const express = require('express');
+const { createHash } = require('node:crypto');
+const { createReplayCache } = require('../utils/replayCache');
+const loginReplay = createReplayCache();
 const router = express.Router();
 const { authenticateWithGoogle, logout } = require('../services/userService');
 const { authenticate, refreshAccessToken } = require('../middleware/auth');
@@ -16,7 +19,13 @@ router.post('/google', authLimiter, validateGoogleAuth, async (req, res) => {
     const ipAddress = getClientIp(req);
     const userAgent = getUserAgent(req);
 
-    const result = await authenticateWithGoogle(credential, ipAddress, userAgent);
+    // Retrying the same verified identity token must not create duplicate sessions.
+    const requestId = req.body.requestId;
+    if (requestId !== undefined && (typeof requestId !== 'string' || !/^[\w-]{8,100}$/.test(requestId))) return res.status(400).json({ error: 'Invalid sign-in request' });
+    const operation = () => authenticateWithGoogle(credential, ipAddress, userAgent);
+    // A fresh sign-in after logout gets a new request ID; only network retries reuse it.
+    const key = createHash('sha256').update(credential + ':' + (requestId || '')).digest('hex');
+    const result = requestId ? await loginReplay(key, operation) : await operation();
 
     // Log successful authentication
     await logAuth(
@@ -35,7 +44,7 @@ router.post('/google', authLimiter, validateGoogleAuth, async (req, res) => {
       expiresAt: result.expiresAt
     });
   } catch (error) {
-    console.error('Google auth error:', error);
+    console.error('Google auth error:', error.message);
 
     // Log failed authentication
     await logFailedLogin(
@@ -45,11 +54,8 @@ router.post('/google', authLimiter, validateGoogleAuth, async (req, res) => {
       error.message
     );
 
-    res.status(401).json({
-      success: false,
-      error: 'Authentication failed',
-      message: error.message
-    });
+    const status = error.status || 503;
+    res.status(status).json({ success: false, error: status === 503 ? 'Sign-in is reconnecting. Please try again shortly.' : 'Google sign-in could not be completed. Please try again.' });
   }
 });
 
@@ -75,13 +81,9 @@ router.post('/refresh', authLimiter, async (req, res) => {
       expiresAt: result.expiresAt
     });
   } catch (error) {
-    console.error('Refresh token error:', error);
+    console.error('Refresh token error:', error.message);
 
-    res.status(401).json({
-      success: false,
-      error: 'Failed to refresh token',
-      message: error.message
-    });
+    res.status(error.status || 503).json({ success: false, error: 'Could not refresh your session. Please try again.' });
   }
 });
 

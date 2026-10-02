@@ -7,7 +7,8 @@ function fixture() {
     members: [1,2].map(user_id => ({ user_id, user: { user_id, display_name: 'Person' } })) };
   const personal = { playlist_id: 10, playlist_name: 'Private', playlist_type: 'personal', created_by_user_id: 1, room: null, is_active: true, songs: [] };
   let query; const writes = [];
-  const db = { rooms: { findUnique: async () => room, findMany: async () => [room] }, room_members: { updateMany: async () => ({ count: 1 }) },
+  const db = { rooms: { findUnique: async () => room, findMany: async q => room.members.some(member => member.user_id === q.where.members.some.user_id) ? [room] : [] }, room_members: { updateMany: async () => ({ count: 1 }) },
+    pending_join_requests: { findFirst: async () => null },
     playlists: { findUnique: async () => personal, findMany: async q => { query=q; return [personal]; } } };
   const auth = () => {};
   const router = createMobileRouter({ db, auth,
@@ -56,4 +57,23 @@ test('call signals go only to their approved recipient with incremental cursors'
   assert.equal((await f.invoke('/rooms/:code/call','get',{params})).data.signals.length,0);
   const received=await f.invoke('/rooms/:code/call','get',{userId:2,params});assert.equal(received.data.signals[0].from,'1');
   assert.equal((await f.invoke('/rooms/:code/call','get',{userId:2,params,query:{after:received.data.signals[0].id}})).data.signals.length,0);
+});
+
+test('approval replay returns success for an already-approved member',async()=>{
+  const res=await fixture().invoke('/rooms/:code/approve','post',{params:{code:'MOON01'},body:{userId:'2',approved:true}});
+  assert.equal(res.statusCode,200);assert.equal(res.data.members.length,2);
+});
+test('retried call signal produces only one recipient event',async()=>{
+  const f=fixture();const params={code:'MOON01'};const body={to:'2',type:'invite',payload:{callId:'call-123'},requestId:'request-123'};
+  await f.invoke('/rooms/:code/call/signal','post',{params,body});
+  await f.invoke('/rooms/:code/call/signal','post',{params,body});
+  const received=await f.invoke('/calls','get',{userId:2});
+  assert.equal(received.data.signals.length,1);assert.equal(received.data.signals[0].code,'MOON01');
+  assert.equal(received.data.signals[0].payload.callId,'call-123');
+});
+test('global call inbox is private to approved recipients',async()=>{
+  const f=fixture();await f.invoke('/rooms/:code/call/signal','post',{params:{code:'MOON01'},body:{to:'2',type:'invite',payload:{}}});
+  assert.equal((await f.invoke('/calls','get',{userId:1})).data.signals.length,0);
+  assert.equal((await f.invoke('/calls','get',{userId:999})).data.signals.length,0);
+  assert.equal((await f.invoke('/calls','get',{userId:2})).data.signals.length,1);
 });
