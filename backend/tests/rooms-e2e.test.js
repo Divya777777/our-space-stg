@@ -76,3 +76,16 @@ test('shared volume and profile name', async () => {
   assert.equal((await call('patch', { name: '  ' })).statusCode, 400);
   assert.equal((await call('patch', { name: 'Moonbeam' })).data.name, 'Moonbeam');
 });
+test('large files arrive as 1 MB pieces: pages stay light and pieces are not announced', async () => {
+  const s = setup();
+  const envelope = { n: b64(24), b: b64(48) };
+  const piece = b64(1000000);
+  for (let i = 0; i < 6; i++) assert.equal((await s.call('/rooms/:code/e2e', 'post', { body: { nonce: b64(24), box: piece, keys: { 1: envelope, 2: envelope }, hint: 'part' } })).statusCode, 201);
+  await s.call('/rooms/:code/e2e', 'post', { body: { nonce: b64(24), box: b64(60), keys: { 1: envelope, 2: envelope }, hint: 'file' } });
+  const first = await s.call('/rooms/:code/e2e', 'get', { userId: 2, query: { after: '0', limit: '20' } });
+  assert.ok(first.data.messages.length >= 1 && first.data.messages.length < 7);
+  assert.equal(first.data.more, true);
+  let after = first.data.messages.at(-1).id; let total = first.data.messages.length;
+  while (true) { const page = await s.call('/rooms/:code/e2e', 'get', { userId: 2, query: { after: String(after), limit: '20' } }); total += page.data.messages.length; if (!page.data.more) break; after = page.data.messages.at(-1).id; }
+  assert.equal(total, 7);
+});

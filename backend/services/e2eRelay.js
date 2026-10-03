@@ -3,6 +3,7 @@
 // kept only until members can fetch it (7 days at most), then deleted. Chat history lives on phones.
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const TYPE = 'e2e';
+const PAGE_BYTES = 4 * 1024 * 1024;
 function createE2ERelay({ db, encryption = require('../utils/encryption'), now = Date.now } = {}) {
   const key = () => encryption.getEncryptionKey();
   return {
@@ -22,12 +23,15 @@ function createE2ERelay({ db, encryption = require('../utils/encryption'), now =
     async list(roomId, after, limit) {
       const rows = await db.messages.findMany({ where: { room_id: roomId, message_type: TYPE, message_id: { gt: after }, sent_at: { gte: new Date(now() - TTL_MS) } }, orderBy: { message_id: 'asc' }, take: limit + 1, include: { sender: { select: { user_id: true, display_name: true } } } });
       const k = key();
-      const messages = rows.slice(0, limit).flatMap(row => {
+      // Keep each page light: stop after ~4 MB of sealed data (big files arrive in 1 MB pieces).
+      let budget = PAGE_BYTES, kept = 0;
+      for (const row of rows.slice(0, limit)) { if (kept && budget <= 0) break; budget -= (row.content_encrypted || '').length; kept += 1; }
+      const messages = rows.slice(0, kept).flatMap(row => {
         try {
           return [{ id: row.message_id, from: String(row.sender_user_id), name: row.sender?.display_name || '', at: new Date(row.sent_at).getTime(), payload: JSON.parse(encryption.decrypt(row.content_encrypted, row.encryption_iv, row.auth_tag, k)) }];
         } catch { return []; }
       });
-      return { messages, more: rows.length > limit };
+      return { messages, more: rows.length > kept };
     },
   };
 }

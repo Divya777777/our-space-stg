@@ -157,7 +157,7 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     const room = await roomFor(req.params.code, req.user.user_id);
     const { nonce, box, keys } = req.body;
     if (typeof nonce !== 'string' || nonce.length !== 32 || !B64.test(nonce)) fail('Invalid message');
-    if (typeof box !== 'string' || !box.length || box.length > 1900000 || !B64.test(box)) fail('Message too large (max about 1.4 MB)', 413);
+    if (typeof box !== 'string' || !box.length || box.length > 1900000 || !B64.test(box)) fail('Message piece too large', 413);
     if (!keys || typeof keys !== 'object' || Array.isArray(keys)) fail('Invalid message keys');
     const recipients = Object.entries(keys);
     if (!recipients.length || recipients.length > 50) fail('Invalid message keys');
@@ -167,6 +167,8 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     }
     const sent = await e2e.send(room.room_id, req.user.user_id, { v: 1, nonce, box, keys: Object.fromEntries(recipients.map(([u, e]) => [u, { n: e.n, b: e.b }])) });
     changed(room.room_code);
+    // Pieces of a large file are not announced; the file message that completes them is.
+    if (req.body.hint === 'part') { res.status(201).json(sent); return; }
     const kind = ['photo', 'file'].includes(req.body.hint) ? req.body.hint : 'message';
     pusher.notify(room.members.map(m => m.user_id).filter(u => u !== req.user.user_id), {
       title: roomTitle(room), body: `${req.user.display_name} sent ${kind === 'photo' ? 'a photo' : kind === 'file' ? 'a file' : 'a message'}`,
