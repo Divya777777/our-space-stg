@@ -10,9 +10,13 @@ const { positiveId } = require('../utils/ids');
 const { createYouTubeSearch } = require('../services/youtubeSearch');
 const { createRoomQueues } = require('../utils/roomQueue');
 const plans = require('../utils/plans');
+const { createE2ERelay } = require('../services/e2eRelay');
 
-function createMobileRouter({ db = new PrismaClient(), roomService = rooms, playlistService = lists, messageService = messages, auth = authenticate, youtube = createYouTubeSearch(), queues = createRoomQueues(), env = process.env } = {}) {
+function createMobileRouter({ db = new PrismaClient(), roomService = rooms, playlistService = lists, messageService = messages, auth = authenticate, youtube = createYouTubeSearch(), queues = createRoomQueues(), env = process.env, relay = null } = {}) {
   const router = express.Router();
+  const e2e = relay || createE2ERelay({ db });
+  // Shared YouTube volume per room (0–100). Ephemeral like the queue; everyone hears the same level.
+  const volumes = new Map();
   const feed = new ChangeFeed();
   const changed = code => feed.notify('room:' + code);
   const playlistsChanged = code => { if (code) { feed.notify('lists:' + code); changed(code); } };
@@ -25,7 +29,7 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     if (!error.status) console.error('Mobile API:', error.message);
     res.status(error.status || 500).json({ error: error.status ? error.message : 'Unable to complete request', ...(error.code ? { code: error.code, limit: error.limit } : {}) });
   } };
-  router.get('/capabilities', (req, res) => res.json({ service: 'our-space-mobile-api', version: 2, features: ['call-inbox', 'signal-replay', 'join-status', 'room-queue', 'plans', 'delete', ...(youtube.configured() ? ['youtube-search'] : [])] }));
+  router.get('/capabilities', (req, res) => res.json({ service: 'our-space-mobile-api', version: 2, features: ['call-inbox', 'signal-replay', 'join-status', 'room-queue', 'plans', 'delete', 'e2e-chat', 'rename', 'volume', 'profile', ...(youtube.configured() ? ['youtube-search'] : [])] }));
   router.use(auth);
   router.use(rateLimit({ windowMs: 60000, max: 240, keyGenerator: req => String(req.user.user_id), standardHeaders: true, legacyHeaders: false }));
   async function roomFor(code, userId) {
@@ -35,17 +39,23 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     if (!room.members.some(m => m.user_id === userId)) fail('Waiting for admin approval', 403);
     return room;
   }
-  const person = user => ({ id: String(user.user_id), name: user.display_name });
-  async function roomView(room, userId) {
+  // `key` is the member's public chat key (NaCl box), stored in the otherwise unused users.encryption_key_salt column.
+  const person = user => ({ id: String(user.user_id), name: user.display_name, ...(user.encryption_key_salt ? { key: user.encryption_key_salt } : {}) });
+  // The default shared playlist is named after its room so lists of playlists stay readable.
+  const listName = p => p.playlist_type === 'room' && p.playlist_name === 'Room Playlist' && p.room?.room_name ? p.room.room_name : p.playlist_name;
+  // `light` skips chat history (room lists); the open room asks for the full view.
+  async function roomView(room, userId, { light = false } = {}) {
     const updateCursor = feed.version('room:' + room.room_code);
     const playlistVersion = feed.version('lists:' + room.room_code);
-    const [history, playing, pending] = await Promise.all([
-      messageService.getRoomMessages(room.room_id, 100), playlistService.getNowPlaying(room.room_id),
-      room.host_user_id === userId ? roomService.getPendingRequests(room.room_id, userId) : []
+    const [history, playing, pending, e2eCursor] = await Promise.all([
+      light ? [] : messageService.getRoomMessages(room.room_id, 100), playlistService.getNowPlaying(room.room_id),
+      room.host_user_id === userId ? roomService.getPendingRequests(room.room_id, userId) : [],
+      light ? 0 : e2e.latestId(room.room_id).catch(() => 0),
     ]);
     return { updateCursor, playlistVersion, code: room.room_code, name: room.room_name || 'Our space', hostId: String(room.host_user_id),
       members: room.members.map(m => person(m.user)), requests: pending.map(r => person(r.user)), queue: queues.view(room.room_id),
-      messages: history.filter(m => m.sender).map(m => ({ id: m.messageId, userId: m.sender.userId, name: m.sender.displayName, text: m.content, at: new Date(m.sentAt).getTime() })),
+      e2eCursor, volume: volumes.has(room.room_id) ? volumes.get(room.room_id) : 100,
+      messages: history.filter(m => m.sender && m.messageType !== 'e2e').map(m => ({ id: m.messageId, userId: m.sender.userId, name: m.sender.displayName, text: m.content, at: new Date(m.sentAt).getTime() })),
       playback: playing ? { videoId: playing.videoId, playing: playing.isPlaying, position: playing.currentTimeSeconds || 0,
         updatedAt: new Date(playing.startedAt).getTime(), revision: Number(playing.nowPlayingId), updatedBy: '' } : null };
   }
@@ -54,7 +64,7 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     await db.room_members.updateMany({ where: { room_id: room.room_id, user_id: userId }, data: { left_at: null, is_online: true } });
   }
   function playlistView(p, code = null) {
-    return { id: String(p.playlist_id), name: p.playlist_name, scope: p.playlist_type, ownerId: String(p.created_by_user_id),
+    return { id: String(p.playlist_id), name: listName(p), scope: p.playlist_type, ownerId: String(p.created_by_user_id),
       roomCode: p.playlist_type === 'room' ? code || p.room?.room_code : null,
       tracks: p.songs.map(item => ({ videoId: item.song.video_id, title: item.song.title })) };
   }
@@ -65,7 +75,7 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
   }
   router.get('/rooms', route(async (req, res) => {
     const data = await db.rooms.findMany({ where: { is_active: true, members: { some: { user_id: req.user.user_id } } }, include: { members: { include: { user: true } } }, orderBy: { created_at: 'desc' } });
-    res.json(await Promise.all(data.map(room => roomView(room, req.user.user_id))));
+    res.json(await Promise.all(data.map(room => roomView(room, req.user.user_id, { light: true }))));
   }));
   router.get('/plan', route(async (req, res) => {
     const userId = req.user.user_id;
@@ -79,6 +89,7 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     const limits = plans.limitsFor(req.user.user_id, env);
     if (limits && await db.rooms.count({ where: { host_user_id: req.user.user_id, is_active: true } }) >= limits.rooms) throw plans.plusRequired('rooms');
     const room = await roomService.createRoom(req.user.user_id, { roomName: string(req.body.name), requiresApproval: true });
+    await Promise.resolve().then(() => db.playlists.updateMany({ where: { room_id: room.room_id, playlist_type: 'room', playlist_name: 'Room Playlist' }, data: { playlist_name: string(req.body.name, 80) } })).catch(() => {});
     res.status(201).json(await roomView(await roomFor(room.room_code, req.user.user_id), req.user.user_id));
   }));
   // The admin deletes the room for everyone; a member who is not the admin leaves it instead.
@@ -94,6 +105,65 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
       changed(room.room_code);
       res.json({ left: true });
     }
+  }));
+  // Rename (admin only). The room's shared playlist follows the name when it still carries the old one.
+  router.patch('/rooms/:code', route(async (req, res) => {
+    const room = await roomFor(req.params.code, req.user.user_id);
+    if (room.host_user_id !== req.user.user_id) fail('Only the room admin can rename the room', 403);
+    const name = string(req.body.name, 80);
+    const previous = room.room_name || 'Room Playlist';
+    await db.rooms.update({ where: { room_id: room.room_id }, data: { room_name: name } });
+    await db.playlists.updateMany({ where: { room_id: room.room_id, playlist_type: 'room', playlist_name: { in: ['Room Playlist', previous] } }, data: { playlist_name: name } });
+    playlistsChanged(room.room_code);
+    res.json(await roomView(await roomFor(room.room_code, req.user.user_id), req.user.user_id));
+  }));
+  router.post('/rooms/:code/volume', route(async (req, res) => {
+    const room = await roomFor(req.params.code, req.user.user_id);
+    const volume = Number(req.body.volume);
+    if (!Number.isInteger(volume) || volume < 0 || volume > 100) fail('Volume must be 0 to 100');
+    volumes.set(room.room_id, volume);
+    changed(room.room_code);
+    res.json(await roomView(room, req.user.user_id));
+  }));
+  // Profile: the app asks new accounts to pick a name (firstLogin), and the name can be changed later.
+  router.get('/me', route(async (req, res) => {
+    const user = await db.users.findUnique({ where: { user_id: req.user.user_id }, select: { display_name: true, last_login_at: true } });
+    res.json({ id: String(req.user.user_id), name: user?.display_name || req.user.display_name, firstLogin: !user?.last_login_at });
+  }));
+  router.patch('/me', route(async (req, res) => {
+    const name = string(req.body.name, 30);
+    await db.users.update({ where: { user_id: req.user.user_id }, data: { display_name: name, last_login_at: new Date() } });
+    res.json({ id: String(req.user.user_id), name, firstLogin: false });
+  }));
+  router.put('/keys', route(async (req, res) => {
+    const key = req.body.publicKey;
+    if (typeof key !== 'string' || !/^[A-Za-z0-9+/]{43}=$/.test(key)) fail('Invalid public key');
+    await db.users.update({ where: { user_id: req.user.user_id }, data: { encryption_key_salt: key } });
+    res.json({ success: true });
+  }));
+  const B64 = /^[A-Za-z0-9+/]+={0,2}$/;
+  router.post('/rooms/:code/e2e', route(async (req, res) => {
+    const room = await roomFor(req.params.code, req.user.user_id);
+    const { nonce, box, keys } = req.body;
+    if (typeof nonce !== 'string' || nonce.length !== 32 || !B64.test(nonce)) fail('Invalid message');
+    if (typeof box !== 'string' || !box.length || box.length > 1900000 || !B64.test(box)) fail('Message too large (max about 1.4 MB)', 413);
+    if (!keys || typeof keys !== 'object' || Array.isArray(keys)) fail('Invalid message keys');
+    const recipients = Object.entries(keys);
+    if (!recipients.length || recipients.length > 50) fail('Invalid message keys');
+    for (const [userId, envelope] of recipients) {
+      if (!/^\d{1,12}$/.test(userId) || !room.members.some(m => String(m.user_id) === userId)) fail('Message keys must be for room members');
+      if (!envelope || typeof envelope.n !== 'string' || typeof envelope.b !== 'string' || envelope.n.length !== 32 || envelope.b.length > 120 || !B64.test(envelope.n) || !B64.test(envelope.b)) fail('Invalid message keys');
+    }
+    const sent = await e2e.send(room.room_id, req.user.user_id, { v: 1, nonce, box, keys: Object.fromEntries(recipients.map(([u, e]) => [u, { n: e.n, b: e.b }])) });
+    changed(room.room_code);
+    res.status(201).json(sent);
+  }));
+  router.get('/rooms/:code/e2e', route(async (req, res) => {
+    const room = await roomFor(req.params.code, req.user.user_id);
+    const after = Number(req.query.after || 0);
+    if (!Number.isSafeInteger(after) || after < 0) fail('Invalid cursor');
+    await e2e.purge(room.room_id).catch(() => {});
+    res.json(await e2e.list(room.room_id, after, Math.min(Math.max(Number(req.query.limit) || 25, 1), 50)));
   }));
   router.post('/rooms/:code/join', route(async (req, res) => {
     const result = check(await roomService.joinRoom(req.user.user_id, req.params.code)); changed(req.params.code); res.json({ approved: !!result.joined });
@@ -174,6 +244,7 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     if (action === 'add') queues.add(room.room_id, { videoId: req.body.videoId, title: req.body.title }, String(req.user.user_id));
     else if (action === 'remove') { if (typeof req.body.id !== 'string') fail('Invalid queue item'); queues.remove(room.room_id, req.body.id); }
     else if (action === 'clear') queues.clear(room.room_id);
+    else if (action === 'move') { if (typeof req.body.id !== 'string' || !Number.isInteger(req.body.to)) fail('Invalid move'); queues.move(room.room_id, req.body.id, req.body.to); }
     else if (action === 'next') {
       // Every member's player reports the end of a video; only the first report for that video advances.
       const from = req.body.from;
@@ -222,6 +293,17 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     if (p.room) await activate(p.room, req.user.user_id);
     if (!/^[\w-]{11}$/.test(req.body.videoId || '')) fail('Invalid YouTube video');
     check(await playlistService.addSongToPlaylist(p.playlist_id, req.user.user_id, { videoId: req.body.videoId, title: string(req.body.title, 500) }));
+    playlistsChanged(p.room?.room_code);
+    res.json(playlistView(await playlistFor(p.playlist_id, req.user.user_id)));
+  }));
+  // New order of a playlist, as the full list of its video IDs.
+  router.put('/playlists/:id/order', route(async (req, res) => {
+    const p = await playlistFor(req.params.id, req.user.user_id);
+    const order = req.body.videoIds;
+    if (!Array.isArray(order) || order.length !== p.songs.length || new Set(order).size !== order.length) fail('Send every video in the playlist exactly once');
+    const byVideo = new Map(p.songs.map(item => [item.song.video_id, item.playlist_song_id]));
+    if (order.some(v => !byVideo.has(v))) fail('Send every video in the playlist exactly once');
+    check(await playlistService.reorderPlaylist(p.playlist_id, req.user.user_id, order.map((v, i) => ({ playlistSongId: byVideo.get(v), newPosition: i }))));
     playlistsChanged(p.room?.room_code);
     res.json(playlistView(await playlistFor(p.playlist_id, req.user.user_id)));
   }));

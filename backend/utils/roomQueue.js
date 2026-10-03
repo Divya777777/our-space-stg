@@ -23,6 +23,8 @@ function createRoomQueues({ now = Date.now } = {}) {
       save(key, [...items.slice(0, at), item, ...items.slice(at)]);
       return item;
     },
+    /** Move an item to a new position (0 = next). */
+    move(key, id, to) { const items = list(key); const from = items.findIndex(i => i.id === id); if (from === -1) return; const next = items.slice(); const [item] = next.splice(from, 1); next.splice(Math.max(0, Math.min(to, next.length)), 0, item); save(key, next); },
     remove(key, id) { save(key, list(key).filter(i => i.id !== id)); },
     clear(key) { rooms.delete(key); },
     /** Replace playlist continuation (playing from a playlist) or drop it (anything else was chosen). */
