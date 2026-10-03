@@ -1,0 +1,13 @@
+name: Keep backend warm
+# Render's free plan sleeps after 15 idle minutes, which makes the first app open slow.
+# A light request every 10 minutes keeps it awake. It does not touch the database.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: curl -fsS --max-time 60 https://our-space-stg.onrender.com/api/mobile/capabilities > /dev/null
