@@ -35,6 +35,7 @@ model users {
   call_participations    call_participants[]
   recent_rooms           recent_rooms[]
   audit_logs             audit_logs[]
+  push_tokens            push_tokens[]
 }
 
 model user_sessions {
@@ -321,4 +322,15 @@ model connection_logs {
   created_at       DateTime  @default(now())
 
   @@index([room_id])
+}
+
+model push_tokens {
+  token      String   @id
+  user_id    Int
+  platform   String   @default("android")
+  updated_at DateTime @default(now())
+
+  user       users    @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+
+  @@index([user_id])
 }
