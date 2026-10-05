@@ -35,3 +35,20 @@ test('the backend creates its push table itself, once', async () => {
   await push.register(1, token(9), 'android'); await push.send([1], { title: 't' });
   assert.equal(sql.filter(q => /CREATE TABLE IF NOT EXISTS push_tokens/.test(q)).length, 1);
 });
+test('production path uses plain SQL (works even with an older Prisma client) and reports status', async () => {
+  const sql = []; const saved = [];
+  const db = {
+    $executeRawUnsafe: async (q, ...params) => { sql.push(q); if (/INSERT INTO push_tokens/.test(q)) saved.push({ token: params[0], user_id: params[1] }); return 1; },
+    $queryRawUnsafe: async (q, ...ids) => saved.filter(r => ids.includes(r.user_id)).map(r => ({ token: r.token })),
+  };
+  const fetchImpl = async url => url.endsWith('/send')
+    ? { ok: true, status: 200, json: async () => ({ data: [{ status: 'ok', id: 'r1' }] }) }
+    : { ok: true, status: 200, json: async () => ({ data: { r1: { status: 'error', message: 'Unable to retrieve the FCM server key', details: { error: 'InvalidCredentials' } } } }) };
+  const push = createPush({ db, fetchImpl, env: {} });
+  await push.register(5, token(5), 'android');
+  assert.ok(sql.some(q => /ON CONFLICT \(token\)/.test(q)));
+  assert.deepEqual(await push.report(5), { phones: 1, last: null });
+  assert.equal(await push.send([5], { title: 't' }), 1);
+  assert.deepEqual((await push.report(5)).last.ticketIds, ['r1']);
+  assert.equal((await push.report(6)).phones, 0);
+});
