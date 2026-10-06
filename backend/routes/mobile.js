@@ -14,8 +14,12 @@ const { createE2ERelay } = require('../services/e2eRelay');
 const { createPush } = require('../services/push');
 const { createGoals, sqlStore } = require('../services/goals');
 const { attachGoalRoutes } = require('./goals');
+const { createGames, sqlStore: gameStore } = require('../services/games');
+const { attachGameRoutes } = require('./games');
+const { createPlanner, sqlStore: plannerStore } = require('../services/planner');
+const { attachPlannerRoutes } = require('./planner');
 
-function createMobileRouter({ db = new PrismaClient(), roomService = rooms, playlistService = lists, messageService = messages, auth = authenticate, youtube = createYouTubeSearch(), queues = createRoomQueues(), env = process.env, relay = null, push = null, goals } = {}) {
+function createMobileRouter({ db = new PrismaClient(), roomService = rooms, playlistService = lists, messageService = messages, auth = authenticate, youtube = createYouTubeSearch(), queues = createRoomQueues(), env = process.env, relay = null, push = null, goals, games, planner } = {}) {
   const router = express.Router();
   const e2e = relay || createE2ERelay({ db });
   const pusher = push || createPush({ db, env });
@@ -34,9 +38,9 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     if (!error.status) console.error('Mobile API:', error.message);
     res.status(error.status || 500).json({ error: error.status ? error.message : 'Unable to complete request', ...(error.code ? { code: error.code, limit: error.limit } : {}) });
   } };
-  router.get('/capabilities', (req, res) => res.json({ service: 'our-space-mobile-api', version: 2, features: ['call-inbox', 'signal-replay', 'join-status', 'room-queue', 'plans', 'delete', 'e2e-chat', 'rename', 'volume', 'goals', 'profile', 'push', ...(youtube.configured() ? ['youtube-search'] : [])] }));
+  router.get('/capabilities', (req, res) => res.json({ service: 'our-space-mobile-api', version: 2, features: ['call-inbox', 'signal-replay', 'join-status', 'room-queue', 'plans', 'delete', 'e2e-chat', 'rename', 'volume', 'goals', 'games', 'group-calls', 'planner', 'remove-member', 'profile', 'push', ...(youtube.configured() ? ['youtube-search'] : [])] }));
   router.use(auth);
-  router.use(rateLimit({ windowMs: 60000, max: 240, keyGenerator: req => String(req.user.user_id), standardHeaders: true, legacyHeaders: false }));
+  router.use(rateLimit({ windowMs: 60000, max: 600, keyGenerator: req => String(req.user.user_id), standardHeaders: true, legacyHeaders: false }));
   async function roomFor(code, userId) {
     if (!/^[A-Z0-9]{6,10}$/.test(code)) fail('Invalid room code');
     const room = await db.rooms.findUnique({ where: { room_code: code }, include: { members: { include: { user: true } } } });
@@ -45,6 +49,12 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     return room;
   }  // Shared goals (Goals tab): personal and together goals, progress, cheers, monthly record.
   attachGoalRoutes(router, { roomFor, route, pusher, roomTitle, goals: goals || createGoals({ store: sqlStore(db) }) });
+  // Play tab: Scribble, Truth or Dare, How well do you know me, monthly scores.
+  attachGameRoutes(router, { roomFor, route, pusher, roomTitle, games: games || createGames({ store: gameStore(db) }) });
+  // Planner: study dates, movie dates, playdates, with a reminder 1 hour before.
+  const plannerService = planner || createPlanner({ store: plannerStore(db) });
+  if (!planner && typeof db.$queryRawUnsafe === 'function' && env.PLANNER_SWEEP !== 'off') plannerService.startSweep(pusher);
+  attachPlannerRoutes(router, { roomFor, route, pusher, roomTitle, planner: plannerService });
 
   // `key` is the member's public chat key (NaCl box), stored in the otherwise unused users.encryption_key_salt column.
   const person = user => ({ id: String(user.user_id), name: user.display_name, ...(user.encryption_key_salt ? { key: user.encryption_key_salt } : {}) });
@@ -112,6 +122,17 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
       changed(room.room_code);
       res.json({ left: true });
     }
+  }));
+  // The admin removes someone from the room. They lose access at once and need approval to come back.
+  router.delete('/rooms/:code/members/:userId', route(async (req, res) => {
+    const room = await roomFor(req.params.code, req.user.user_id);
+    if (room.host_user_id !== req.user.user_id) fail('Only the room admin can remove members', 403);
+    const target = id(req.params.userId);
+    if (target === req.user.user_id) fail('You can’t remove yourself. Delete the room instead.');
+    if (!room.members.some(member => member.user_id === target)) fail('They’re not in this room', 404);
+    await db.room_members.deleteMany({ where: { room_id: room.room_id, user_id: target } });
+    changed(room.room_code);
+    res.json(await roomView(await roomFor(room.room_code, req.user.user_id), req.user.user_id));
   }));
   // Rename (admin only). The room's shared playlist follows the name when it still carries the old one.
   router.patch('/rooms/:code', route(async (req, res) => {
@@ -399,7 +420,7 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     const room = await roomFor(req.params.code, req.user.user_id); prune();
     const to = id(req.body.to);
     if (to === req.user.user_id || !room.members.some(m => m.user_id === to)) fail('Recipient is not in this room', 403);
-    if (!['invite','accept','reject','offer','answer','candidate','end'].includes(req.body.type) || !req.body.payload || typeof req.body.payload !== 'object' || Array.isArray(req.body.payload) || JSON.stringify(req.body.payload).length > 65536) fail('Invalid call signal');
+    if (!['invite','accept','reject','offer','answer','candidate','end','hello'].includes(req.body.type) || !req.body.payload || typeof req.body.payload !== 'object' || Array.isArray(req.body.payload) || JSON.stringify(req.body.payload).length > 65536) fail('Invalid call signal');
     const requestId = req.body.requestId;
     if (requestId !== undefined && (typeof requestId !== 'string' || !/^[\w-]{8,100}$/.test(requestId))) fail('Invalid request ID');
     if (requestId && signals.some(s => s.from === String(req.user.user_id) && s.requestId === requestId)) { res.json({ success: true }); return; }
@@ -408,11 +429,17 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     feed.notify('call:' + room.room_id);
     feed.notify('inbox:' + to);
     // The other phone may be locked or the app closed: ring it with a high-priority notification.
-    if (req.body.type === 'invite') pusher.notify([to], {
-      title: req.user.display_name, body: req.body.payload.video === false ? 'Incoming voice call' : 'Incoming video call',
-      data: { type: 'call', code: room.room_code, callId: typeof req.body.payload.callId === 'string' ? req.body.payload.callId.slice(0, 100) : '', video: req.body.payload.video !== false },
-      channelId: 'calls', categoryId: 'incoming_call', sound: 'default', priority: 'high', ttl: 40,
-    });
+    if (req.body.type === 'invite') {
+      const group = req.body.payload.group === true;
+      const kind = req.body.payload.video === false ? 'voice' : 'video';
+      pusher.notify([to], {
+        title: group ? roomTitle(room) : req.user.display_name,
+        body: group ? `${req.user.display_name} is calling the room · ${kind} call` : `Incoming ${kind} call`,
+        data: { type: 'call', code: room.room_code, callId: typeof req.body.payload.callId === 'string' ? req.body.payload.callId.slice(0, 100) : '', video: req.body.payload.video !== false },
+        // Rings with the app's ringtone (Android channel + iOS sound file); older apps fall back to the default sound.
+        channelId: 'incoming_calls', categoryId: 'incoming_call', sound: 'ringtone.wav', priority: 'high', ttl: 40,
+      });
+    }
     res.json({ success: true });
   }));
   return router;
