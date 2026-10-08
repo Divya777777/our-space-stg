@@ -22,9 +22,13 @@ function attachGameRoutes(router, { roomFor, route, pusher, roomTitle, games }) 
   }));
   router.post('/rooms/:code/scribble/turn', route(async (req, res) => {
     const room = await roomFor(code(req), req.user.user_id);
-    const turn = await games.sendTurn(room, req.user.user_id);
+    const turn = await games.sendTurn(room, req.user.user_id, req.body);
     tell(room, others(room, req.user.user_id), `${req.user.display_name} drew something for you. Guess it whenever you’re free.`);
     res.status(201).json({ id: String(turn.id) });
+  }));
+  router.get('/rooms/:code/scribble/word', route(async (req, res) => {
+    const room = await roomFor(code(req), req.user.user_id);
+    res.json({ word: await games.drawWord(room, req.query.skip) });
   }));
   router.get('/rooms/:code/scribble/turns', route(async (req, res) => {
     const room = await roomFor(code(req), req.user.user_id);
@@ -52,7 +56,7 @@ function attachGameRoutes(router, { roomFor, route, pusher, roomTitle, games }) 
   }));
   router.post('/rooms/:code/quiz/answers', route(async (req, res) => {
     const room = await roomFor(code(req), req.user.user_id);
-    await games.quizAnswer(room, req.user.user_id, req.body?.answers);
+    await games.quizAnswer(room, req.user.user_id, req.body?.answers, req.body?.ids);
     tell(room, others(room, req.user.user_id), `${req.user.display_name} answered 10 questions about themself. How well do you know them?`);
     res.json(await games.quiz(room, req.user.user_id));
   }));

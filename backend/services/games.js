@@ -1,40 +1,20 @@
-// Play tab: Scribble (live and turn-by-turn), Truth or Dare, "How well do you know me?" and monthly scores.
+// Play tab: Scribble (draw and send; live rounds still supported for older apps), Truth or Dare, "How well do you know me?" and monthly scores.
 // Live games (Scribble rounds, Truth or Dare) are short and kept in memory per room, like the Up next queue.
 // Turn-by-turn drawings, quiz answers and scores are stored, in tables the backend creates itself.
 const ROUND_MS = 60 * 1000;
+const GUESS_MS = 60 * 1000; // a sent drawing: 60 seconds to guess, counted from when you open it
 const ROUNDS = 3;
 const WORDS = ['kite', 'moon', 'pizza', 'house', 'star', 'cat', 'tree', 'boat', 'cup', 'sun', 'flower', 'fish', 'car', 'heart', 'cake', 'rain', 'cloud', 'guitar', 'apple', 'book',
   'chair', 'clock', 'dog', 'eye', 'hat', 'key', 'lamp', 'leaf', 'mountain', 'phone', 'rocket', 'shoe', 'snail', 'snowman', 'spider', 'train', 'umbrella', 'whale', 'bicycle', 'bridge',
   'butterfly', 'camera', 'candle', 'castle', 'crown', 'diamond', 'dragon', 'egg', 'envelope', 'feather', 'glasses', 'hamburger', 'ice cream', 'island', 'ladder', 'lighthouse', 'lion',
   'mushroom', 'octopus', 'owl', 'pencil', 'penguin', 'pineapple', 'rainbow', 'robot', 'sandwich', 'scissors', 'sock', 'sunflower', 'tent', 'tooth', 'turtle', 'volcano', 'watermelon', 'window'];
-const DECKS = {
-  sweet: {
-    truth: ['What’s the first thing you noticed about me?', 'Which day with me would you live again?', 'What small habit of mine do you secretly love?', 'When did you first miss me?', 'What song reminds you of us?', 'What’s a compliment you’ve never said out loud?', 'What do you want us to do together this year?', 'What’s your favourite memory of us?'],
-    dare: ['Send me a voice note saying three things you like about me.', 'Do your best impression of me for 10 seconds.', 'Set a photo of us as your lock screen until tomorrow.', 'Plan our next date in 30 seconds — out loud.', 'Sing one line of our song.', 'Write me a two-line poem right now.', 'Tell me a story about us in exactly ten words.', 'Show me the last photo of us on your phone.'],
-  },
-  fun: {
-    truth: ['What’s the most embarrassing song you know every word of?', 'What’s the weirdest thing you’ve searched online this week?', 'Which of my friends would survive longest in a zombie film?', 'What’s your most useless talent?', 'What’s the worst haircut you’ve ever had?', 'What’s a food you secretly hate?', 'What would your superhero name be?', 'What’s the silliest thing you’ve cried at?'],
-    dare: ['Talk in an accent until your next turn.', 'Show the last photo in your gallery.', 'Do 10 squats while saying the alphabet.', 'Text a friend “I know what you did” and show the reply.', 'Do your best runway walk.', 'Speak only in questions until your next turn.', 'Balance a spoon on your nose for 10 seconds.', 'Make up a jingle about what you ate today.'],
-  },
-  spicy: {
-    truth: ['Which outfit of mine do you like most?', 'What’s your favourite way I say your name?', 'Describe your ideal night in with me in five words.', 'What was the moment you first felt butterflies?', 'What do you find most attractive about me?'],
-    dare: ['Whisper something flirty — no laughing.', 'Give me your best wink on camera.', 'Tell me the moment you knew you liked me, slowly.', 'Describe our perfect date night in one breath.', 'Hold eye contact for 20 seconds without laughing.'],
-  },
-};
-// "How well do you know me?": each person answers these about themself; the others guess.
-const QUIZ = [
-  { q: 'What would {name} order at midnight?', opts: ['Maggi', 'Pizza', 'Ice cream', 'Nothing — asleep'] },
-  { q: '{name}’s dream holiday?', opts: ['Mountains', 'Beach', 'Big city', 'Road trip'] },
-  { q: 'What annoys {name} most?', opts: ['Late replies', 'Loud chewing', 'Spoilers', 'Slow walkers'] },
-  { q: '{name}’s comfort movie?', opts: ['A rom-com', 'Animated', 'Thriller', 'Old classic'] },
-  { q: 'How does {name} spend a free Sunday?', opts: ['Sleeping in', 'Out with friends', 'Binge-watching', 'A hobby project'] },
-  { q: '{name}’s go-to drink?', opts: ['Chai', 'Coffee', 'Juice', 'Just water'] },
-  { q: 'What would {name} save first in a fire?', opts: ['Phone', 'Photos', 'A pet or plant', 'Laptop'] },
-  { q: '{name}’s biggest fear?', opts: ['Spiders', 'Heights', 'Being alone', 'Public speaking'] },
-  { q: 'Which superpower would {name} pick?', opts: ['Teleport', 'Read minds', 'Fly', 'Freeze time'] },
-  { q: 'What makes {name} feel loved most?', opts: ['Kind words', 'Time together', 'Little gifts', 'Hugs'] },
-];
+const { DECKS, QUIZ } = require('./gameContent');
 const pick = list => list[Math.floor(Math.random() * list.length)];
+const shuffle = list => { const a = [...list]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const QUIZ_SIZE = 10;
+const cleanStroke = st => (st && typeof st.id === 'string' && st.id.length <= 40 && Array.isArray(st.p) && st.p.length <= 2000)
+  ? { id: st.id, c: /^#[0-9A-Fa-f]{6}$/.test(st.c) ? st.c : '#141125', s: Math.max(1, Math.min(24, Number(st.s) || 5)), p: st.p.filter(pt => Array.isArray(pt) && pt.length === 2).map(([x, y]) => [Math.max(0, Math.min(1, Number(x) || 0)), Math.max(0, Math.min(1, Number(y) || 0))]) }
+  : null;
 const monthOf = (t = Date.now()) => new Date(t).toISOString().slice(0, 7);
 const norm = text => String(text || '').toLowerCase().replace(/[^a-z ]/g, '').replace(/\s+/g, ' ').trim();
 
@@ -113,8 +93,23 @@ function createGames({ store, now = Date.now }) {
     return { view: scribbleView(sc, me) };
   }
   /** "Not on a call? Send it as a turn instead": the drawing waits for the others to guess later. */
-  async function sendTurn(room, me) {
+  /** A word to draw for a turn-by-turn Scribble (avoids words recently drawn in this room). */
+  async function drawWord(room, avoid) {
+    const recent = new Set((await store.listTurns(room.room_id)).slice(-20).map(x => x.word));
+    if (avoid) recent.add(String(avoid));
+    const fresh = WORDS.filter(w => !recent.has(w));
+    return pick(fresh.length ? fresh : WORDS);
+  }
+  async function sendTurn(room, me, body) {
     const s = slot(room.room_id);
+    // Draw-and-send: the whole drawing arrives at once with its word; no live game, no timer.
+    if (body && Array.isArray(body.strokes)) {
+      const word = String(body.word || '');
+      if (!WORDS.includes(word)) throw err('Pick a word to draw');
+      const strokes = body.strokes.slice(0, 400).map(cleanStroke).filter(Boolean);
+      if (!strokes.length) throw err('Draw something first');
+      return store.addTurn({ room_id: room.room_id, from_user: Number(me), word, strokes, at: now() });
+    }
     const sc = s.scribble;
     if (!sc || Number(sc.drawer) !== Number(me) || !sc.strokes.length) throw err('Draw something first');
     const turn = await store.addTurn({ room_id: room.room_id, from_user: Number(me), word: sc.word, strokes: sc.strokes, at: now() });
@@ -123,18 +118,30 @@ function createGames({ store, now = Date.now }) {
   }
   async function turns(room, me) {
     const list = await store.listTurns(room.room_id);
-    return list.filter(t => !t.solved && Number(t.from_user) !== Number(me)).map(t => turnView(room, t, me));
+    return list.filter(t => !t.solved && Number(t.from_user) !== Number(me) && !expired(t, me)).map(t => turnView(room, t, me));
   }
+  const openedAt = (t, me) => Number((t.opened || {})[me] || 0);
+  const expired = (t, me) => !t.solved && openedAt(t, me) > 0 && now() >= openedAt(t, me) + GUESS_MS;
   function turnView(room, t, me) {
     const solved = !!t.solved;
+    const opened = openedAt(t, me);
+    const late = expired(t, me);
     return { id: String(t.id), from: String(t.from_user), fromName: nameOf(room, t.from_user), at: Number(t.at), strokes: t.strokes, length: t.word.length,
-      hints: t.hints || 0, tries: t.tries || [], solved, word: solved ? t.word : t.word.slice(0, t.hints || 0), mine: Number(t.from_user) === Number(me) };
+      hints: t.hints || 0, tries: t.tries || [], solved, word: solved || late ? t.word : t.word.slice(0, t.hints || 0), mine: Number(t.from_user) === Number(me),
+      expired: late, msLeft: opened ? Math.max(0, opened + GUESS_MS - now()) : GUESS_MS, started: !!opened };
   }
   async function turnAction(room, me, id, body) {
     const t = await store.getTurn(Number(id));
     if (!t || Number(t.room_id) !== Number(room.room_id)) throw err('Drawing not found', 404);
     if (Number(t.from_user) === Number(me)) throw err('That’s your own drawing', 403);
     if (t.solved) return { turn: turnView(room, t, me), solved: true };
+    // The 60 seconds start the first time you open the drawing; after that it's a reveal, no points.
+    if (body?.action === 'open') {
+      if (!openedAt(t, me)) { t.opened = { ...(t.opened || {}), [me]: now() }; await store.updateTurn(t.id, { hints: t.hints || 0, tries: t.tries || [], solved: false, opened: t.opened }); }
+      return { turn: turnView(room, t, me), solved: false };
+    }
+    if (!openedAt(t, me)) { t.opened = { ...(t.opened || {}), [me]: now() }; }
+    if (expired(t, me)) return { turn: turnView(room, t, me), solved: false, expired: true };
     if (body?.action === 'hint') {
       t.hints = Math.min(Math.max(1, t.word.length - 1), (t.hints || 0) + 1);
     } else if (body?.action === 'guess') {
@@ -145,7 +152,7 @@ function createGames({ store, now = Date.now }) {
         await award(room, me, Math.max(0, 2 - (t.hints || 0))); await award(room, t.from_user, 2);
       } else t.tries = [...(t.tries || []), text].slice(-20);
     } else throw err('Unknown action');
-    await store.updateTurn(t.id, { hints: t.hints || 0, tries: t.tries || [], solved: !!t.solved });
+    await store.updateTurn(t.id, { hints: t.hints || 0, tries: t.tries || [], solved: !!t.solved, opened: t.opened || {} });
     return { turn: turnView(room, t, me), solved: !!t.solved };
   }
 
@@ -158,9 +165,10 @@ function createGames({ store, now = Date.now }) {
   function drawCard(td, kind) {
     const decks = Object.keys(td.decks).filter(k => td.decks[k]);
     const all = decks.flatMap(d => DECKS[d][kind].map(text => ({ deck: d, kind, text })));
-    const fresh = all.filter(c => !td.used.includes(c.text));
-    const card = pick(fresh.length ? fresh : all);
-    td.used.push(card.text); td.card = card;
+    let fresh = all.filter(c => !td.used.has(c.text));
+    if (!fresh.length) { for (const c of all) td.used.delete(c.text); fresh = all; }
+    const card = pick(fresh);
+    td.used.add(card.text); td.card = card;
   }
   async function truthDare(room, me, body) {
     const s = slot(room.room_id);
@@ -169,7 +177,7 @@ function createGames({ store, now = Date.now }) {
     const action = body?.action;
     if (action === 'start' || !td) {
       if (action !== 'start') return { view: null };
-      td = s.td = { version: (td?.version || 0) + 1, decks: { sweet: true, fun: true, spicy: false }, spicyYes: {}, turn: Number(me), turnName: nameOf(room, me), card: null, swaps: Object.fromEntries(people.map(p => [p.id, 2])), used: [], need: people.length };
+      td = s.td = { version: (td?.version || 0) + 1, decks: { sweet: true, fun: true, spicy: false }, spicyYes: {}, turn: Number(me), turnName: nameOf(room, me), card: null, swaps: Object.fromEntries(people.map(p => [p.id, 2])), used: (s.tdUsed = s.tdUsed || new Set()), need: people.length };
       return { view: tdView(td), started: true };
     }
     if (!action || action === 'peek') return { view: tdView(td) };
@@ -204,36 +212,48 @@ function createGames({ store, now = Date.now }) {
   }
 
   // ---------- How well do you know me ----------
+  // Answers are stored as { ids, a }: which questions (indexes into QUIZ) and the option picked for each.
+  // Older rows are a plain array of 10 answers to the first 10 questions.
+  const unpack = answers => Array.isArray(answers) ? { ids: answers.map((_, i) => i), a: answers } : answers;
+  const asked = (ids, about) => ids.map(i => ({ id: i, q: QUIZ[i].q, you: QUIZ[i].you, opts: QUIZ[i].opts, about }));
   async function quiz(room, me) {
     const rows = await store.quizAnswers(room.room_id);
     const guesses = await store.quizGuesses(room.room_id, Number(me));
     const others = members(room).filter(m => m.id !== Number(me));
     const mine = rows.find(r => Number(r.user_id) === Number(me));
+    const last = mine ? new Set(unpack(mine.answers).ids) : new Set();
+    // 10 new questions for this round, preferring ones you weren't asked last time.
+    const pool = shuffle(QUIZ.map((_, i) => i));
+    const ids = [...pool.filter(i => !last.has(i)), ...pool.filter(i => last.has(i))].slice(0, QUIZ_SIZE);
     return {
-      questions: QUIZ.map(q => ({ q: q.q, opts: q.opts })),
-      answered: !!mine, myAnswers: mine ? mine.answers : null,
+      questions: asked(ids), ids,
+      answered: !!mine, myAnswers: mine ? unpack(mine.answers).a : null,
       people: others.map(o => {
         const row = rows.find(r => Number(r.user_id) === o.id);
+        const set = row && unpack(row.answers);
         const g = row && guesses.find(x => Number(x.about) === o.id && Number(x.version) === Number(row.version));
-        return { id: String(o.id), name: o.name, ready: !!row, guessed: !!g, score: g ? g.score : null, answers: g ? row.answers : null, guesses: g ? g.guesses : null };
+        return { id: String(o.id), name: o.name, ready: !!row, guessed: !!g, score: g ? g.score : null, answers: g ? set.a : null, guesses: g ? g.guesses : null, questions: set ? asked(set.ids) : null };
       }),
     };
   }
-  const validAnswers = list => Array.isArray(list) && list.length === QUIZ.length && list.every((v, i) => Number.isInteger(v) && v >= 0 && v < QUIZ[i].opts.length);
-  async function quizAnswer(room, me, answers) {
-    if (!validAnswers(answers)) throw err('Answer all 10 questions');
-    await store.saveQuizAnswers(room.room_id, Number(me), answers, now());
+  const validIds = ids => Array.isArray(ids) && ids.length === QUIZ_SIZE && new Set(ids).size === QUIZ_SIZE && ids.every(i => Number.isInteger(i) && i >= 0 && i < QUIZ.length);
+  const validPicks = (list, ids) => Array.isArray(list) && list.length === ids.length && list.every((v, i) => Number.isInteger(v) && v >= 0 && v < QUIZ[ids[i]].opts.length);
+  async function quizAnswer(room, me, answers, ids) {
+    const set = ids === undefined ? QUIZ.slice(0, QUIZ_SIZE).map((_, i) => i) : ids;
+    if (!validIds(set) || !validPicks(answers, set)) throw err('Answer all 10 questions');
+    await store.saveQuizAnswers(room.room_id, Number(me), { ids: set, a: answers }, now());
   }
   async function quizGuess(room, me, about, guesses) {
-    if (!validAnswers(guesses)) throw err('Guess all 10 questions');
     const row = (await store.quizAnswers(room.room_id)).find(r => Number(r.user_id) === Number(about));
     if (!row || Number(about) === Number(me)) throw err('They haven’t answered yet', 404);
+    const set = unpack(row.answers);
+    if (!validPicks(guesses, set.ids)) throw err('Guess all 10 questions');
     const done = (await store.quizGuesses(room.room_id, Number(me))).find(x => Number(x.about) === Number(about) && Number(x.version) === Number(row.version));
-    if (done) return { score: done.score, answers: row.answers };
-    const score = guesses.filter((g, i) => g === row.answers[i]).length;
+    if (done) return { score: done.score, answers: set.a };
+    const score = guesses.filter((g, i) => g === set.a[i]).length;
     await store.saveQuizGuess(room.room_id, Number(me), Number(about), Number(row.version), guesses, score);
     await award(room, me, score);
-    return { score, answers: row.answers };
+    return { score, answers: set.a };
   }
 
   // ---------- Hub ----------
@@ -252,7 +272,7 @@ function createGames({ store, now = Date.now }) {
       quiz: { ready: q.people.filter(p => p.ready && !p.guessed).map(p => ({ id: p.id, name: p.name })), answered: q.answered },
     };
   }
-  return { hub, scribble, sendTurn, turns, turnAction, truthDare, quiz, quizAnswer, quizGuess, partnerOf, nameOf };
+  return { hub, scribble, sendTurn, drawWord, turns, turnAction, truthDare, quiz, quizAnswer, quizGuess, partnerOf, nameOf };
 }
 
 /** Postgres store with plain SQL; tables are created on first use. */
@@ -269,6 +289,7 @@ function sqlStore(db) {
         from_user INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE, word TEXT NOT NULL, strokes TEXT NOT NULL,
         hints INTEGER NOT NULL DEFAULT 0, tries TEXT NOT NULL DEFAULT '[]', solved BOOLEAN NOT NULL DEFAULT FALSE, at BIGINT NOT NULL)`);
       await db.$executeRawUnsafe('CREATE INDEX IF NOT EXISTS game_turns_room_idx ON game_turns(room_id)');
+      await db.$executeRawUnsafe("ALTER TABLE game_turns ADD COLUMN IF NOT EXISTS opened TEXT NOT NULL DEFAULT '{}'");
       await db.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS quiz_answers (
         room_id INTEGER NOT NULL REFERENCES rooms(room_id) ON DELETE CASCADE,
         user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
@@ -281,7 +302,7 @@ function sqlStore(db) {
     })().catch(error => { ready = null; throw error; });
     return ready;
   };
-  const parseTurn = r => r && { ...r, id: Number(r.id), strokes: JSON.parse(r.strokes), tries: JSON.parse(r.tries || '[]'), at: Number(r.at) };
+  const parseTurn = r => r && { ...r, id: Number(r.id), strokes: JSON.parse(r.strokes), tries: JSON.parse(r.tries || '[]'), opened: JSON.parse(r.opened || '{}'), at: Number(r.at) };
   return {
     async addScore(roomId, userId, month, points) {
       await ensure();
@@ -295,7 +316,7 @@ function sqlStore(db) {
     },
     async listTurns(roomId) { await ensure(); return (await db.$queryRawUnsafe('SELECT * FROM game_turns WHERE room_id = $1 AND solved = FALSE ORDER BY id DESC LIMIT 20', Number(roomId))).map(parseTurn); },
     async getTurn(id) { await ensure(); return parseTurn((await db.$queryRawUnsafe('SELECT * FROM game_turns WHERE id = $1', Number(id)))[0]); },
-    async updateTurn(id, patch) { await ensure(); await db.$executeRawUnsafe('UPDATE game_turns SET hints = $2, tries = $3, solved = $4 WHERE id = $1', Number(id), Number(patch.hints), JSON.stringify(patch.tries), !!patch.solved); },
+    async updateTurn(id, patch) { await ensure(); await db.$executeRawUnsafe('UPDATE game_turns SET hints = $2, tries = $3, solved = $4, opened = $5 WHERE id = $1', Number(id), Number(patch.hints), JSON.stringify(patch.tries), !!patch.solved, JSON.stringify(patch.opened || {})); },
     async quizAnswers(roomId) { await ensure(); return (await db.$queryRawUnsafe('SELECT user_id, answers, version FROM quiz_answers WHERE room_id = $1', Number(roomId))).map(r => ({ ...r, answers: JSON.parse(r.answers), version: Number(r.version) })); },
     async saveQuizAnswers(roomId, userId, answers, version) {
       await ensure();
@@ -317,7 +338,7 @@ function memoryStore() {
   return {
     async addScore(roomId, userId, month, points) { const k = `${roomId}:${userId}:${month}`; scores.set(k, (scores.get(k) || 0) + points); },
     async scores(roomId, month) { return [...scores].filter(([k]) => k.startsWith(`${roomId}:`) && k.endsWith(`:${month}`)).map(([k, points]) => ({ user_id: Number(k.split(':')[1]), points })); },
-    async addTurn(t) { const row = { ...t, id: turns.length + 1, hints: 0, tries: [], solved: false }; turns.push(row); return { ...row }; },
+    async addTurn(t) { const row = { ...t, id: turns.length + 1, hints: 0, tries: [], solved: false, opened: {} }; turns.push(row); return { ...row }; },
     async listTurns(roomId) { return turns.filter(t => t.room_id === roomId && !t.solved).map(t => ({ ...t })); },
     async getTurn(id) { const t = turns.find(x => x.id === Number(id)); return t ? { ...t } : null; },
     async updateTurn(id, patch) { Object.assign(turns.find(x => x.id === Number(id)), patch); },
@@ -328,4 +349,4 @@ function memoryStore() {
   };
 }
 
-module.exports = { createGames, sqlStore, memoryStore, QUIZ, DECKS, WORDS, ROUND_MS };
+module.exports = { createGames, sqlStore, memoryStore, QUIZ, DECKS, WORDS, ROUND_MS, GUESS_MS };

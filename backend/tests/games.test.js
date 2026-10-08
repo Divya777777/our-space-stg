@@ -94,3 +94,52 @@ test('turn-by-turn Scribble with hints, Truth or Dare turns and spicy consent, q
   const hub = (await s.call('/rooms/:code/play', 'get')).data;
   assert.deepEqual(hub.scores.map(x => x.points), [2 + 6, 1]);
 });
+
+test('draw-and-send Scribble, fresh quiz sets and no repeated Truth or Dare cards', async () => {
+  const s = setup();
+  const w = (await s.call('/rooms/:code/scribble/word', 'get')).data.word;
+  assert.ok(WORDS.includes(w));
+  assert.equal((await s.call('/rooms/:code/scribble/turn', 'post', { body: { word: 'not-a-word', strokes: [stroke('a')] } })).statusCode, 400);
+  assert.equal((await s.call('/rooms/:code/scribble/turn', 'post', { body: { word: w, strokes: [] } })).statusCode, 400);
+  const sent = await s.call('/rooms/:code/scribble/turn', 'post', { body: { word: w, strokes: [stroke('a'), stroke('b')] } });
+  assert.equal(sent.statusCode, 201);
+  const turns = (await s.call('/rooms/:code/scribble/turns', 'get', { userId: 2 })).data.turns;
+  assert.equal(turns.length, 1); assert.equal(turns[0].strokes.length, 2); assert.equal(turns[0].length, w.length);
+
+  // Quiz: each round asks a different 10; guesses are checked against that person's own set.
+  const q1 = (await s.call('/rooms/:code/quiz', 'get', { userId: 2 })).data;
+  assert.equal(q1.questions.length, 10); assert.equal(new Set(q1.ids).size, 10);
+  assert.ok(q1.questions.every(q => q.you && !q.you.includes('{name}')));
+  const picks = q1.ids.map(() => 1);
+  assert.equal((await s.call('/rooms/:code/quiz/answers', 'post', { userId: 2, body: { answers: picks, ids: q1.ids } })).statusCode, 200);
+  const q2 = (await s.call('/rooms/:code/quiz', 'get', { userId: 2 })).data;
+  assert.ok(q2.ids.every(i => !q1.ids.includes(i)), 'next round avoids last round’s questions');
+  const view = (await s.call('/rooms/:code/quiz', 'get', { userId: 1 })).data;
+  assert.deepEqual(view.people[0].questions.map(q => q.id), q1.ids);
+  const g = await s.call('/rooms/:code/quiz/guess', 'post', { body: { about: 2, guesses: picks.map((v, i) => (i < 7 ? v : 0)) } });
+  assert.equal(g.data.score, 7);
+
+  // Truth or Dare: no card repeats until every card in the chosen decks has been used.
+  await s.call('/rooms/:code/truth-dare', 'post', { body: { action: 'start' } });
+  const seen = new Set();
+  for (let i = 0; i < 30; i++) {
+    const v = (await s.call('/rooms/:code/truth-dare', 'post', { userId: 1, body: { action: 'pick', kind: 'truth' } })).data.view;
+    assert.ok(!seen.has(v.card.text), 'no repeats'); seen.add(v.card.text);
+  }
+});
+
+test('a sent drawing gives 60 seconds to guess, counted from when it is opened', async () => {
+  const s = setup();
+  const w = (await s.call('/rooms/:code/scribble/word', 'get')).data.word;
+  const id = (await s.call('/rooms/:code/scribble/turn', 'post', { body: { word: w, strokes: [stroke('a')] } })).data.id;
+  s.tick(10 * 60 * 1000); // waiting before opening doesn't count
+  const opened = (await s.call('/rooms/:code/scribble/turns/:id', 'post', { userId: 2, id, body: { action: 'open' } })).data.turn;
+  assert.equal(opened.msLeft, 60000); assert.equal(opened.started, true); assert.equal(opened.expired, false);
+  s.tick(30000);
+  const mid = (await s.call('/rooms/:code/scribble/turns/:id', 'post', { userId: 2, id, body: { action: 'guess', text: 'nope' } })).data.turn;
+  assert.equal(mid.msLeft, 30000);
+  s.tick(31000);
+  const late = await s.call('/rooms/:code/scribble/turns/:id', 'post', { userId: 2, id, body: { action: 'guess', text: w } });
+  assert.equal(late.data.expired, true); assert.equal(late.data.solved, false); assert.equal(late.data.turn.word, w);
+  assert.equal((await s.call('/rooms/:code/scribble/turns', 'get', { userId: 2 })).data.turns.length, 0, 'gone from their list');
+});

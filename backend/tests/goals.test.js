@@ -79,3 +79,17 @@ test('validation and spans', async () => {
   assert.equal(activeOn({ starts_on: '2026-10-05', ends_on: '2026-10-31', span: 'month' }, '2026-11-01'), false);
   assert.equal(activeOn({ starts_on: '2026-10-05', span: 'ongoing' }, '2027-01-01'), true);
 });
+
+test('one goal per kind for each person; custom goals can repeat', async () => {
+  const s = setup();
+  const post = (body, userId = 1) => s.call('/rooms/:code/goals', 'post', { userId, body: { track: 'count', target: 8, inc: 1, span: 'ongoing', day: DAY, ...body } });
+  assert.equal((await post({ name: 'Water', kind: 'water', owner: 'me' })).statusCode, 201);
+  const again = await post({ name: 'More water', kind: 'water', owner: 'me' });
+  assert.equal(again.statusCode, 400);
+  assert.match(again.data.error, /already have a water goal/);
+  assert.equal((await post({ name: 'Water', kind: 'water', owner: 'me' }, 2)).statusCode, 201, 'the other person can have their own');
+  const both = await post({ name: 'Water together', kind: 'water', owner: 'both' });
+  assert.equal(both.statusCode, 400);
+  assert.equal((await post({ name: 'Stretch', kind: 'custom', track: 'check', owner: 'me' })).statusCode, 201);
+  assert.equal((await post({ name: 'Stretch again', kind: 'custom', track: 'check', owner: 'me' })).statusCode, 201);
+});

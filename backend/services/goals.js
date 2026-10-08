@@ -94,6 +94,17 @@ function createGoals({ store }) {
     if (together && !partnerOf(room, me)) throw err('Invite someone to this room first, then set a goal together');
     const existing = (await store.listGoals(room.room_id)).filter(g => !g.archived_on);
     if (existing.length >= MAX_GOALS) throw err('This room has a lot of goals already. Remove one first.');
+    // One goal per kind for each person (water, steps…). "Your own" goals can repeat.
+    if (kind !== 'custom') {
+      const people = together ? [Number(me), Number(partnerOf(room, me).id)] : [Number(me)];
+      const live = existing.filter(g => g.kind === kind && (!g.ends_on || g.ends_on >= day));
+      const clash = live.find(g => people.some(p => g.owner_user_id == null ? true : Number(g.owner_user_id) === p));
+      if (clash) {
+        const label = { steps: 'steps', water: 'water', pushups: 'push-ups', workout: 'workout', read: 'reading' }[kind] || kind;
+        const theirs = clash.owner_user_id != null && Number(clash.owner_user_id) !== Number(me);
+        throw err(theirs ? `${partnerOf(room, me).name} already has a ${label} goal. Pick another one, or choose “Your own”.` : `You already have a ${label} goal. Change that one, or choose “Your own” for something new.`);
+      }
+    }
     const goal = await store.insertGoal({
       room_id: room.room_id, created_by: Number(me), owner_user_id: together ? null : Number(me), name, kind, track, target,
       unit: typeof body.unit === 'string' ? body.unit.trim().slice(0, 20) : '', inc, span, remind: body.remind !== false,
