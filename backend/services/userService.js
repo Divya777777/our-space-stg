@@ -82,6 +82,47 @@ async function authenticateWithGoogle(credential, ipAddress, userAgent) {
 }
 
 /**
+ * Sign in with Apple (App Store guideline 4.8). The identity token is verified against Apple's keys.
+ * Apple shares the email (or a private relay address) and, the first time only, the name.
+ * An Apple ID whose verified email matches an existing account signs into that same account.
+ */
+const { createAppleVerifier } = require('../utils/appleAuth');
+let appleVerifier = null;
+async function authenticateWithApple(identityToken, fullName, ipAddress, userAgent) {
+  try {
+    if (!appleVerifier) appleVerifier = createAppleVerifier({ audiences: (process.env.APPLE_AUDIENCES || 'com.ourspace.mobile').split(',').map(s => s.trim()).filter(Boolean) });
+    const payload = await appleVerifier(identityToken);
+    const appleId = 'apple:' + payload.sub;
+    const verified = payload.email_verified === true || payload.email_verified === 'true';
+    const email = verified && typeof payload.email === 'string' ? payload.email.toLowerCase() : null;
+    let user = await prisma.users.findUnique({ where: { google_id: appleId } });
+    if (!user && email) user = await prisma.users.findUnique({ where: { email } });
+    if (user?.deleted_at || (user?.account_locked && (!user.locked_until || new Date(user.locked_until) > new Date()))) {
+      throw Object.assign(new Error('Account is unavailable'), { status: 403 });
+    }
+    const name = typeof fullName === 'string' && fullName.trim() ? fullName.trim().slice(0, 30) : 'Stargazer';
+    if (user) {
+      user = await prisma.users.update({ where: { user_id: user.user_id }, data: { last_login_at: user.last_login_at ? new Date() : user.last_login_at, last_login_ip: ipAddress, failed_login_attempts: 0 } });
+    } else {
+      user = await prisma.users.create({ data: { google_id: appleId, email: email || `${payload.sub}@apple.ourspace.invalid`, display_name: name,
+        preferences: { create: { theme: 'dark', notifications_enabled: true, auto_join_rooms: false, default_video_quality: 'auto' } } } });
+    }
+    return startSession(user, ipAddress, userAgent);
+  } catch (error) {
+    console.error('Apple auth error:', error.message);
+    throw Object.assign(new Error(error.status ? error.message : 'Sign-in temporarily unavailable'), { status: error.status || 503 });
+  }
+}
+async function startSession(user, ipAddress, userAgent) {
+  const accessToken = generateAccessToken({ userId: user.user_id, email: user.email });
+  const refreshToken = generateRefreshToken({ userId: user.user_id, email: user.email });
+  const accessExpiresAt = new Date(require('jsonwebtoken').decode(accessToken).exp * 1000);
+  const refreshExpiresAt = new Date(require('jsonwebtoken').decode(refreshToken).exp * 1000);
+  await prisma.user_sessions.create({ data: { user_id: user.user_id, access_token: accessToken, refresh_token: refreshToken, access_expires_at: accessExpiresAt, refresh_expires_at: refreshExpiresAt, ip_address: ipAddress, user_agent: userAgent, is_active: true } });
+  return { user: { userId: user.user_id.toString(), email: user.email, displayName: user.display_name, avatarUrl: user.avatar_url }, accessToken, refreshToken, expiresAt: accessExpiresAt };
+}
+
+/**
  * Logout user (invalidate session)
  */
 async function logout(sessionId) {
@@ -385,6 +426,7 @@ async function getUserActivity(userId, limit = 10) {
 
 module.exports = {
   authenticateWithGoogle,
+  authenticateWithApple,
   logout,
   getUserProfile,
   updatePreferences,

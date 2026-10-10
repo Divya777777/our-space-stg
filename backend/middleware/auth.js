@@ -48,6 +48,16 @@ function verifyToken(token, isRefreshToken = false) {
  * Authentication middleware
  * Verifies JWT token and attaches user to request
  */
+// Phones long-poll every few seconds; remembering a verified session briefly skips one database read per request.
+// A logout, ban or deletion takes effect within SESSION_CACHE_MS.
+const SESSION_CACHE_MS = 20000;
+const sessionCache = new Map();
+function rememberSession(token, session) {
+  if (sessionCache.size > 5000) sessionCache.clear();
+  const expires = new Date(session.access_expires_at || Date.now() + SESSION_CACHE_MS).getTime();
+  sessionCache.set(token, { user: session.user, sessionId: session.session_id, until: Math.min(Date.now() + SESSION_CACHE_MS, expires) });
+}
+
 async function authenticate(req, res, next) {
   try {
     // Get token from Authorization header
@@ -61,6 +71,13 @@ async function authenticate(req, res, next) {
 
     // Verify token
     const decoded = verifyToken(token);
+
+    const cached = sessionCache.get(token);
+    if (cached && cached.until > Date.now()) {
+      req.user = { ...cached.user }; req.sessionId = cached.sessionId;
+      return next();
+    }
+    if (cached) sessionCache.delete(token);
 
     // Check if session exists and is active
     const session = await prisma.user_sessions.findFirst({
@@ -120,6 +137,7 @@ async function authenticate(req, res, next) {
     // Attach user to request
     req.user = session.user;
     req.sessionId = session.session_id;
+    if (!session.user.account_locked) rememberSession(token, session);
 
     next();
   } catch (error) {

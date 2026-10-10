@@ -17,6 +17,8 @@ a.btn{display:block;background:#C8B6FF;color:#0C101C;text-decoration:none;font-w
 }
 function createInviteRouter() {
   const router = express.Router();
+  // Privacy policy, terms, support and account-deletion pages (linked from the app and the store listings).
+  router.use(require('./legal').createLegalRouter());
   router.get('/j/:code', (req, res) => {
     const code = String(req.params.code || '').toUpperCase();
     if (!/^[A-Z0-9]{6,10}$/.test(code)) return res.status(404).type('text/plain').send('Invite not found');

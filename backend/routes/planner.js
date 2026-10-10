@@ -19,6 +19,7 @@ function attachPlannerRoutes(router, { roomFor, route, pusher, roomTitle, planne
   router.post('/rooms/:code/planner', route(async (req, res) => {
     const room = await roomFor(code(req), req.user.user_id);
     const plan = await planner.create(room, req.user.user_id, req.body);
+    planner.poke?.();
     const at = when(plan.startsAt, req.body?.timeZone);
     tell(room, others(room, req.user.user_id), `${req.user.display_name} planned “${plan.title}”${at ? ` · ${at}` : ''}. You’ll get a reminder 1 hour before.`);
     res.status(201).json({ plan });
@@ -26,6 +27,7 @@ function attachPlannerRoutes(router, { roomFor, route, pusher, roomTitle, planne
   router.patch('/rooms/:code/planner/:id', route(async (req, res) => {
     const room = await roomFor(code(req), req.user.user_id);
     const { plan, moved } = await planner.update(room, req.user.user_id, req.params.id, req.body);
+    if (moved) planner.poke?.();
     if (moved) { const at = when(plan.startsAt, req.body?.timeZone); tell(room, others(room, req.user.user_id), `${req.user.display_name} moved “${plan.title}”${at ? ` to ${at}` : ''}`); }
     res.json({ plan });
   }));

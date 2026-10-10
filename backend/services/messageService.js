@@ -49,12 +49,14 @@ async function sendMessage(roomId, senderId, messageData) {
 /**
  * Get messages for a room (with decryption)
  */
-async function getRoomMessages(roomId, limit = 100, offset = 0) {
+async function getRoomMessages(roomId, limit = 100, offset = 0, { excludeTypes } = {}) {
   try {
     const messages = await prisma.messages.findMany({
       where: {
         room_id: roomId,
-        deleted_at: null
+        deleted_at: null,
+        // Skipping e2e rows matters: they hold encrypted photo pieces of up to ~2 MB each.
+        ...(excludeTypes?.length ? { message_type: { notIn: excludeTypes } } : {})
       },
       include: {
         sender: {

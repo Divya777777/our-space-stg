@@ -55,8 +55,7 @@ function createGoals({ store }) {
     const partner = partnerOf(room, me);
     const all = (await store.listGoals(room.room_id)).filter(g => activeOn(g, day) && visible(g, room, me));
     const ids = all.map(g => g.goal_id);
-    const progress = ids.length ? await store.progress(ids, day, day) : [];
-    const cheers = ids.length ? await store.cheers(ids, day) : [];
+    const [progress, cheers] = ids.length ? await Promise.all([store.progress(ids, day, day), store.cheers(ids, day)]) : [[], []];
     const value = (g, u) => { const row = progress.find(p => p.goal_id === g.goal_id && Number(p.user_id) === Number(u)); return row ? Number(row.value) : 0; };
     return {
       day, partner: partner && { id: String(partner.id), name: partner.name },

@@ -18,8 +18,11 @@ const { createGames, sqlStore: gameStore } = require('../services/games');
 const { attachGameRoutes } = require('./games');
 const { createPlanner, sqlStore: plannerStore } = require('../services/planner');
 const { attachPlannerRoutes } = require('./planner');
+const { createSafety, sqlStore: safetyStore } = require('../services/safety');
+const { attachSafetyRoutes } = require('./safety');
+const { eraseAccount } = require('../services/accountDeletion');
 
-function createMobileRouter({ db = new PrismaClient(), roomService = rooms, playlistService = lists, messageService = messages, auth = authenticate, youtube = createYouTubeSearch(), queues = createRoomQueues(), env = process.env, relay = null, push = null, goals, games, planner } = {}) {
+function createMobileRouter({ db = new PrismaClient(), roomService = rooms, playlistService = lists, messageService = messages, auth = authenticate, youtube = createYouTubeSearch(), queues = createRoomQueues(), env = process.env, relay = null, push = null, goals, games, planner, safety: safetyService } = {}) {
   const router = express.Router();
   const e2e = relay || createE2ERelay({ db });
   const pusher = push || createPush({ db, env });
@@ -28,6 +31,9 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
   const volumes = new Map();
   const feed = new ChangeFeed();
   const changed = code => feed.notify('room:' + code);
+  // Play/pause fast path: the newest playback per room, announced before the database write finishes.
+  // Phones waiting on the room get just this (no database work), so the other screen reacts in well under a second.
+  const livePlayback = new Map(); // room_code -> { before, cursor, pending, playback }
   const playlistsChanged = code => { if (code) { feed.notify('lists:' + code); changed(code); } };
   router.use((req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
   const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
@@ -38,7 +44,7 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     if (!error.status) console.error('Mobile API:', error.message);
     res.status(error.status || 500).json({ error: error.status ? error.message : 'Unable to complete request', ...(error.code ? { code: error.code, limit: error.limit } : {}) });
   } };
-  router.get('/capabilities', (req, res) => res.json({ service: 'our-space-mobile-api', version: 2, features: ['call-inbox', 'signal-replay', 'join-status', 'room-queue', 'plans', 'delete', 'e2e-chat', 'rename', 'volume', 'goals', 'games', 'group-calls', 'planner', 'remove-member', 'profile', 'push', ...(youtube.configured() ? ['youtube-search'] : [])] }));
+  router.get('/capabilities', (req, res) => res.json({ service: 'our-space-mobile-api', version: 2, features: ['call-inbox', 'signal-replay', 'join-status', 'room-queue', 'plans', 'delete', 'e2e-chat', 'rename', 'volume', 'goals', 'games', 'group-calls', 'planner', 'remove-member', 'safety', 'delete-account', 'profile', 'push', ...(youtube.configured() ? ['youtube-search'] : [])] }));
   router.use(auth);
   router.use(rateLimit({ windowMs: 60000, max: 600, keyGenerator: req => String(req.user.user_id), standardHeaders: true, legacyHeaders: false }));
   async function roomFor(code, userId) {
@@ -55,6 +61,10 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
   const plannerService = planner || createPlanner({ store: plannerStore(db) });
   if (!planner && typeof db.$queryRawUnsafe === 'function' && env.PLANNER_SWEEP !== 'off') plannerService.startSweep(pusher);
   attachPlannerRoutes(router, { roomFor, route, pusher, roomTitle, planner: plannerService });
+  // Report & block (store policies on user-generated content).
+  const safety = safetyService || createSafety({ store: safetyStore(db) });
+  const isBlocked = (a, b) => safety.between(a, b).catch(() => false);
+  attachSafetyRoutes(router, { route, roomFor, safety });
 
   // `key` is the member's public chat key (NaCl box), stored in the otherwise unused users.encryption_key_salt column.
   const person = user => ({ id: String(user.user_id), name: user.display_name, ...(user.encryption_key_salt ? { key: user.encryption_key_salt } : {}) });
@@ -65,7 +75,7 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     const updateCursor = feed.version('room:' + room.room_code);
     const playlistVersion = feed.version('lists:' + room.room_code);
     const [history, playing, pending, e2eCursor] = await Promise.all([
-      light ? [] : messageService.getRoomMessages(room.room_id, 100), playlistService.getNowPlaying(room.room_id),
+      light ? [] : messageService.getRoomMessages(room.room_id, 100, 0, { excludeTypes: ['e2e'] }), playlistService.getNowPlaying(room.room_id),
       room.host_user_id === userId ? roomService.getPendingRequests(room.room_id, userId) : [],
       light ? 0 : e2e.latestId(room.room_id).catch(() => 0),
     ]);
@@ -73,7 +83,7 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
       members: room.members.map(m => person(m.user)), requests: pending.map(r => person(r.user)), queue: queues.view(room.room_id),
       e2eCursor, volume: volumes.has(room.room_id) ? volumes.get(room.room_id) : 100,
       messages: history.filter(m => m.sender && m.messageType !== 'e2e').map(m => ({ id: m.messageId, userId: m.sender.userId, name: m.sender.displayName, text: m.content, at: new Date(m.sentAt).getTime() })),
-      playback: playing ? { videoId: playing.videoId, playing: playing.isPlaying, position: playing.currentTimeSeconds || 0,
+      playback: livePlayback.get(room.room_code)?.pending ? livePlayback.get(room.room_code).playback : playing ? { videoId: playing.videoId, playing: playing.isPlaying, position: playing.currentTimeSeconds || 0,
         updatedAt: new Date(playing.startedAt).getTime(), revision: Number(playing.nowPlayingId), updatedBy: '' } : null };
   }
   async function activate(room, userId) {
@@ -163,6 +173,13 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     await db.users.update({ where: { user_id: req.user.user_id }, data: { display_name: name, last_login_at: new Date() } });
     res.json({ id: String(req.user.user_id), name, firstLogin: false });
   }));
+  // Permanently delete the signed-in account and its data (App Store 5.1.1(v), Google Play).
+  router.delete('/me', route(async (req, res) => {
+    if (req.body?.confirm !== 'DELETE') fail('Confirm deletion first');
+    const { rooms: codes } = await eraseAccount(db, req.user.user_id);
+    codes.forEach(changed);
+    res.json({ deleted: true });
+  }));
   router.put('/push-token', route(async (req, res) => {
     await pusher.register(req.user.user_id, req.body.token, req.body.platform);
     res.json({ success: true });
@@ -216,6 +233,8 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     res.json(await e2e.list(room.room_id, after, Math.min(Math.max(Number(req.query.limit) || 25, 1), 50)));
   }));
   router.post('/rooms/:code/join', route(async (req, res) => {
+    const target = await db.rooms.findUnique({ where: { room_code: String(req.params.code).toUpperCase() }, select: { host_user_id: true } }).catch(() => null);
+    if (target?.host_user_id && await isBlocked(req.user.user_id, target.host_user_id)) fail('You can’t join this room', 403);
     const result = check(await roomService.joinRoom(req.user.user_id, req.params.code)); changed(req.params.code); res.json({ approved: !!result.joined });
     if (!result.joined) {
       const room = await db.rooms.findUnique({ where: { room_code: String(req.params.code).toUpperCase() } }).catch(() => null);
@@ -243,8 +262,21 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
   router.get('/rooms/:code', route(async (req, res) => {
     let room = await roomFor(req.params.code, req.user.user_id);
     if (req.query.wait === '1') {
-      await feed.wait('room:' + room.room_code, req.query.cursor, res, 10000);
+      await feed.wait('room:' + room.room_code, req.query.cursor, res, 20000);
       if (res.destroyed) return;
+      // Only a play/pause happened since this phone's last look: send just that (new apps ask with fast=1).
+      const fast = livePlayback.get(room.room_code);
+      if (req.query.fast === '1' && fast && Number(req.query.cursor) === fast.before && fast.cursor === feed.version('room:' + room.room_code)) {
+        res.json({ code: room.room_code, updateCursor: fast.cursor, playbackOnly: true, playback: fast.playback }); return;
+      }
+      // Nothing changed during the wait (the usual case): answer with the cursor and playback only instead of reloading the whole room.
+      const cursorNow = feed.version('room:' + room.room_code);
+      if (req.query.fast === '1' && Number(req.query.cursor) === cursorNow) {
+        const live = livePlayback.get(room.room_code);
+        let playback = live?.pending ? live.playback : null;
+        if (!playback) { const playing = await playlistService.getNowPlaying(room.room_id); playback = playing ? { videoId: playing.videoId, playing: playing.isPlaying, position: playing.currentTimeSeconds || 0, updatedAt: new Date(playing.startedAt).getTime(), revision: Number(playing.nowPlayingId), updatedBy: '' } : null; }
+        res.json({ code: room.room_code, updateCursor: cursorNow, playbackOnly: true, playback }); return;
+      }
       room = await roomFor(req.params.code, req.user.user_id);
     }
     res.json(await roomView(room, req.user.user_id));
@@ -275,9 +307,18 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
   router.post('/rooms/:code/playback', route(async (req, res) => {
     const room = await roomFor(req.params.code, req.user.user_id);
     if (!/^[\w-]{11}$/.test(req.body.videoId || '') || typeof req.body.playing !== 'boolean' || !Number.isFinite(req.body.position) || req.body.position < 0) fail('Invalid playback');
-    await activate(room, req.user.user_id);
-    const before = await playlistService.getNowPlaying(room.room_id);
-    check(await playlistService.updateNowPlaying(room.room_id, req.user.user_id, { videoId: req.body.videoId, isPlaying: req.body.playing, currentTimeSeconds: req.body.position }));
+    const channel = 'room:' + room.room_code;
+    const fast = { before: feed.version(channel), cursor: 0, pending: true,
+      playback: { videoId: req.body.videoId, playing: req.body.playing, position: req.body.position, updatedAt: Date.now(), revision: Date.now(), updatedBy: String(req.user.user_id) } };
+    changed(room.room_code);
+    fast.cursor = feed.version(channel);
+    livePlayback.set(room.room_code, fast);
+    let before;
+    try {
+      await activate(room, req.user.user_id);
+      before = await playlistService.getNowPlaying(room.room_id);
+      check(await playlistService.updateNowPlaying(room.room_id, req.user.user_id, { videoId: req.body.videoId, isPlaying: req.body.playing, currentTimeSeconds: req.body.position }));
+    } finally { fast.pending = false; }
     if (before?.videoId !== req.body.videoId) {
       // A new video: continue through its playlist if one was given, otherwise drop the old continuation.
       queues.setContext(room.room_id, Array.isArray(req.body.queueContext) ? req.body.queueContext : []);
@@ -386,11 +427,13 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     prune();
     const channel = 'inbox:' + req.user.user_id;
     if (!signals.some(s => s.to === req.user.user_id && s.id > after)) {
-      await feed.wait(channel, req.query.cursor, res, 12000);
+      await feed.wait(channel, req.query.cursor, res, 20000);
       if (res.destroyed) return;
     }
-    const memberships = await db.rooms.findMany({ where: { is_active: true, members: { some: { user_id: req.user.user_id } } }, include: { members: true } });
     prune();
+    // Most waits end with nothing new: skip the membership query then.
+    if (!signals.some(s => s.to === req.user.user_id && s.id > after)) { res.json({ cursor: feed.version(channel), signals: [] }); return; }
+    const memberships = await db.rooms.findMany({ where: { is_active: true, members: { some: { user_id: req.user.user_id } } }, include: { members: true } });
     const received = signals.filter(s => s.to === req.user.user_id && s.id > after).flatMap(signal => {
       const room = memberships.find(room => room.room_id === signal.room && room.members.some(member => String(member.user_id) === signal.from));
       return room ? [{ id: signal.id, from: signal.from, name: signal.name, type: signal.type, payload: signal.payload, code: room.room_code, sentAt: signal.at }] : [];
@@ -420,6 +463,8 @@ function createMobileRouter({ db = new PrismaClient(), roomService = rooms, play
     const room = await roomFor(req.params.code, req.user.user_id); prune();
     const to = id(req.body.to);
     if (to === req.user.user_id || !room.members.some(m => m.user_id === to)) fail('Recipient is not in this room', 403);
+    // Blocked people can't call or ring each other; the caller just sees no answer.
+    if (await isBlocked(req.user.user_id, to)) { res.json({ success: true }); return; }
     if (!['invite','accept','reject','offer','answer','candidate','end','hello'].includes(req.body.type) || !req.body.payload || typeof req.body.payload !== 'object' || Array.isArray(req.body.payload) || JSON.stringify(req.body.payload).length > 65536) fail('Invalid call signal');
     const requestId = req.body.requestId;
     if (requestId !== undefined && (typeof requestId !== 'string' || !/^[\w-]{8,100}$/.test(requestId))) fail('Invalid request ID');

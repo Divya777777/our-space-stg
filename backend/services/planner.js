@@ -81,11 +81,26 @@ function createPlanner({ store, now = () => Date.now() }) {
       }
       return due.length;
     },
-    startSweep(pusher, every = 60 * 1000) {
-      const run = () => { this.sweep(pusher).catch(() => {}); };
-      const timer = setInterval(run, every); timer.unref?.(); setTimeout(run, 5000).unref?.();
-      return () => clearInterval(timer);
+    /**
+     * Wakes only when a reminder is due (checked at most every 6 hours), so an idle server lets the database sleep.
+     * create/update call poke() so a new plan inside the window is picked up at once.
+     */
+    startSweep(pusher, every = 60 * 1000, idle = 6 * HOUR) {
+      let timer = null; let stopped = false;
+      const schedule = ms => { clearTimeout(timer); if (stopped) return; timer = setTimeout(run, Math.max(5000, ms)); timer.unref?.(); };
+      const run = async () => {
+        try {
+          await this.sweep(pusher);
+          const next = store.nextStart ? await store.nextStart(new Date(now() + HOUR)) : null;
+          // Next reminder is due an hour before the next plan; sweep every minute while one is pending.
+          schedule(next ? Math.min(idle, Math.max(every, new Date(next).getTime() - HOUR - now())) : idle);
+        } catch { schedule(5 * every); }
+      };
+      this.poke = () => schedule(every);
+      schedule(5000);
+      return () => { stopped = true; clearTimeout(timer); };
     },
+    poke() {},
   };
 }
 
@@ -124,6 +139,11 @@ function sqlStore(db) {
         JOIN room_members m ON m.room_id = p.room_id AND m.user_id = $1
         LEFT JOIN users u ON u.user_id = p.created_by
         WHERE p.cancelled_at IS NULL AND p.starts_at >= $2 ORDER BY p.starts_at LIMIT 30`, Number(userId), since);
+    },
+    async nextStart(after) {
+      await ensure();
+      const rows = await db.$queryRawUnsafe('SELECT MIN(starts_at) AS at FROM room_plans WHERE cancelled_at IS NULL AND starts_at > $1', after);
+      return rows[0]?.at || null;
     },
     async get(planId) {
       await ensure();

@@ -1,6 +1,17 @@
 // HTTP routes for the Play tab (mounted on the authenticated mobile router).
 function attachGameRoutes(router, { roomFor, route, pusher, roomTitle, games }) {
   const code = req => String(req.params.code || '').toUpperCase();
+  // Live Scribble and Truth or Dare are polled about once a second while open; their state lives in memory,
+  // so the only database read per poll is the membership check. Reuse it for a few seconds.
+  const recent = new Map();
+  const roomForPeek = async (roomCode, userId) => {
+    const key = roomCode + ':' + userId; const hit = recent.get(key);
+    if (hit && hit.until > Date.now()) return hit.room;
+    const room = await roomFor(roomCode, userId);
+    if (recent.size > 2000) recent.clear();
+    recent.set(key, { room, until: Date.now() + 5000 });
+    return room;
+  };
   const others = (room, me) => room.members.filter(m => !m.left_at && Number(m.user_id) !== Number(me)).map(m => Number(m.user_id));
   const tell = (room, to, body, throttleKey) => pusher?.notify(to, {
     title: roomTitle(room), body, data: { type: 'game', code: room.room_code }, channelId: 'messages', sound: 'default', priority: 'high',
@@ -11,7 +22,7 @@ function attachGameRoutes(router, { roomFor, route, pusher, roomTitle, games }) 
     res.json(await games.hub(room, req.user.user_id));
   }));
   router.get('/rooms/:code/scribble', route(async (req, res) => {
-    const room = await roomFor(code(req), req.user.user_id);
+    const room = await roomForPeek(code(req), req.user.user_id);
     res.json(await games.scribble(room, req.user.user_id, { action: 'peek' }));
   }));
   router.post('/rooms/:code/scribble', route(async (req, res) => {
@@ -41,7 +52,7 @@ function attachGameRoutes(router, { roomFor, route, pusher, roomTitle, games }) 
     res.json(result);
   }));
   router.get('/rooms/:code/truth-dare', route(async (req, res) => {
-    const room = await roomFor(code(req), req.user.user_id);
+    const room = await roomForPeek(code(req), req.user.user_id);
     res.json(await games.truthDare(room, req.user.user_id, {}));
   }));
   router.post('/rooms/:code/truth-dare', route(async (req, res) => {

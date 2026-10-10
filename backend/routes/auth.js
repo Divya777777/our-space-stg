@@ -3,7 +3,7 @@ const { createHash } = require('node:crypto');
 const { createReplayCache } = require('../utils/replayCache');
 const loginReplay = createReplayCache();
 const router = express.Router();
-const { authenticateWithGoogle, logout } = require('../services/userService');
+const { authenticateWithGoogle, authenticateWithApple, logout } = require('../services/userService');
 const { authenticate, refreshAccessToken } = require('../middleware/auth');
 const { validateGoogleAuth } = require('../middleware/validation');
 const { authLimiter, getClientIp, getUserAgent } = require('../middleware/security');
@@ -56,6 +56,28 @@ router.post('/google', authLimiter, validateGoogleAuth, async (req, res) => {
 
     const status = error.status || 503;
     res.status(status).json({ success: false, error: status === 503 ? 'Sign-in is reconnecting. Please try again shortly.' : 'Google sign-in could not be completed. Please try again.' });
+  }
+});
+
+/**
+ * POST /api/auth/apple
+ * Sign in with Apple: { identityToken, fullName?, requestId? }
+ */
+router.post('/apple', authLimiter, async (req, res) => {
+  const { identityToken, fullName } = req.body || {};
+  if (typeof identityToken !== 'string' || identityToken.length < 20 || identityToken.length > 5000) return res.status(400).json({ success: false, error: 'Apple sign-in could not be completed. Please try again.' });
+  try {
+    const requestId = req.body.requestId;
+    if (requestId !== undefined && (typeof requestId !== 'string' || !/^[\w-]{8,100}$/.test(requestId))) return res.status(400).json({ error: 'Invalid sign-in request' });
+    const operation = () => authenticateWithApple(identityToken, fullName, getClientIp(req), getUserAgent(req));
+    const key = createHash('sha256').update(identityToken + ':' + (requestId || '')).digest('hex');
+    const result = requestId ? await loginReplay(key, operation) : await operation();
+    await logAuth(result.user.userId, 'apple_login', true, getClientIp(req), getUserAgent(req));
+    res.json({ success: true, user: result.user, accessToken: result.accessToken, refreshToken: result.refreshToken, expiresAt: result.expiresAt });
+  } catch (error) {
+    await logFailedLogin('apple', getClientIp(req), getUserAgent(req), error.message);
+    const status = error.status || 503;
+    res.status(status).json({ success: false, error: status === 503 ? 'Sign-in is reconnecting. Please try again shortly.' : status === 403 ? 'This account is unavailable.' : 'Apple sign-in could not be completed. Please try again.' });
   }
 });
 
